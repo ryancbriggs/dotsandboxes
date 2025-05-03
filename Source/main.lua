@@ -1,4 +1,4 @@
--- main.lua – cleaned and consolidated (updated with AI module)
+-- main.lua – settings screen + reliable “Main Menu” return
 
 import "CoreLibs/graphics"
 import "CoreLibs/sprites"
@@ -7,22 +7,31 @@ import "CoreLibs/timer"
 local gfx = playdate.graphics
 
 ---------------------------------------------------------------------
+-- Persistent settings ----------------------------------------------
+---------------------------------------------------------------------
+local DEFAULT_SETTINGS = { numDots = 6 }
+local settings  = playdate.datastore.read("settings") or {}
+settings.numDots = math.min(8, math.max(4,
+                 settings.numDots or DEFAULT_SETTINGS.numDots))
+local numDots   = settings.numDots        -- working copy while running
+
+---------------------------------------------------------------------
 -- Global state -----------------------------------------------------
 ---------------------------------------------------------------------
-local appState       = "menu"             -- "menu", "pvp", "pvc", "pause"
-local menuOptions    = {"1 Player", "2 Player"}
+local appState       = "menu"             -- "menu", "settings", "pvc", "pvp"
+local menuOptions    = { "1 Player", "2 Player", "Settings" }
 local selectedOption = 1
-local ui             = nil                -- set after a game starts
-local gotoMenu       = false              -- set by System‑menu callback
+local ui             = nil               -- set when a game starts
+local gotoMenuLater  = false             -- handled in gameWillResume()
 
 ---------------------------------------------------------------------
 -- System‑menu entry ------------------------------------------------
 ---------------------------------------------------------------------
 local systemMenu = playdate.getSystemMenu()
 systemMenu:addMenuItem("Main Menu", function()
-    -- Executed while the game is PAUSED inside the System Menu. We
-    -- can't change state until Playdate resumes, so set a flag.
-    gotoMenu = true
+    -- Runs **while the game is paused**, right after the user
+    -- taps the item but *before* the game resumes.
+    gotoMenuLater = true
 end)
 
 ---------------------------------------------------------------------
@@ -37,37 +46,49 @@ math.randomseed(playdate.getSecondsSinceEpoch())
 ---------------------------------------------------------------------
 -- Helpers ----------------------------------------------------------
 ---------------------------------------------------------------------
-local function seekFreeEdge(board, startEdge, delta)
-    local total = #board.edgeToCoord
-    local e = startEdge
-    for _ = 1, total do
-        e = ((e - 1 + delta) % total) + 1
-        if not board:edgeIsFilled(e) then return e end
-    end
-    return startEdge
-end
-
 local function initGame(mode)
-    local board = Board.new()
+    local board = Board.new(numDots)
     ui = UI.new(board)
-    ui.mode = mode           -- "pvp" or "pvc"
-    if mode == "pvc" then
-        -- configure AI difficulty if desired
-        Ai.setDifficulty("random")
-    end
-    appState = mode
+    ui.mode  = mode                     -- remember game mode
+    appState = mode                     -- "pvc" or "pvp"
 end
 
 ---------------------------------------------------------------------
--- Playdate lifecycle callbacks ------------------------------------
+-- SETTINGS SCREEN --------------------------------------------------
+---------------------------------------------------------------------
+local function drawSettings()
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawText("Settings", 40, 40)
+    gfx.drawText("Board size (dots / side):", 40, 80)
+    gfx.drawText(string.format("<  %d  >", numDots), 40, 110)
+    gfx.drawText("◄ / ►  to change", 40, 150)
+    gfx.drawText("A or B  to save / back", 40, 170)
+end
+
+local function handleSettingsInput()
+    if playdate.buttonJustPressed(playdate.kButtonLeft) then
+        numDots = math.max(4, numDots - 1)
+    elseif playdate.buttonJustPressed(playdate.kButtonRight) then
+        numDots = math.min(8, numDots + 1)
+    elseif playdate.buttonJustPressed(playdate.kButtonA)
+        or playdate.buttonJustPressed(playdate.kButtonB) then
+        -- persist & return to menu
+        settings.numDots = numDots
+        playdate.datastore.write(settings, "settings")
+        appState        = "menu"
+        selectedOption  = 1
+    end
+end
+
+---------------------------------------------------------------------
+-- Handle return from the system menu -------------------------------
 ---------------------------------------------------------------------
 function playdate.gameWillResume()
-    -- Called when the System Menu closes
-    if gotoMenu then
-        appState = "menu"
-        ui = nil
+    if gotoMenuLater then
+        appState       = "menu"
+        ui             = nil
         selectedOption = 1
-        gotoMenu = false
+        gotoMenuLater  = false
     end
 end
 
@@ -78,7 +99,7 @@ function playdate.update()
     gfx.clear()
 
     -----------------------------------------------------------------
-    -- MENU STATE ----------------------------------------------------
+    -- MENU ---------------------------------------------------------
     -----------------------------------------------------------------
     if appState == "menu" then
         gfx.setColor(gfx.kColorBlack)
@@ -94,23 +115,34 @@ function playdate.update()
         elseif playdate.buttonJustPressed(playdate.kButtonUp) then
             selectedOption = (selectedOption - 2) % #menuOptions + 1
         elseif playdate.buttonJustPressed(playdate.kButtonA) then
-            initGame(selectedOption == 1 and "pvc" or "pvp")
+            if selectedOption == 1 then
+                initGame("pvc")
+            elseif selectedOption == 2 then
+                initGame("pvp")
+            else -- Settings
+                appState = "settings"
+            end
         end
 
     -----------------------------------------------------------------
-    -- GAMEPLAY STATE ------------------------------------------------
+    -- SETTINGS -----------------------------------------------------
+    -----------------------------------------------------------------
+    elseif appState == "settings" then
+        handleSettingsInput()
+        drawSettings()
+
+    -----------------------------------------------------------------
+    -- GAMEPLAY -----------------------------------------------------
     -----------------------------------------------------------------
     else
-        ui:handleInput()  -- player controls (A, B, d‑pad)
+        ui:handleInput()
 
-        -- AI turn for 1‑player mode -----------------------------------
-        if ui.mode == "pvc" and ui.board.currentPlayer == 2 and not ui.board:isGameOver() then
+        -- AI turn (only in 1‑player mode)
+        if ui.mode == "pvc"
+           and ui.board.currentPlayer == 2
+           and not ui.board:isGameOver() then
             local choice = Ai.chooseMove(ui.board)
-            if choice then
-                ui.board:playEdge(choice)
-                -- cursor stays where it is, so we no longer re‑seek a new free edge
-                -- ui.cursorEdge = seekFreeEdge(ui.board, choice, 1)
-            end
+            if choice then ui.board:playEdge(choice) end
         end
 
         ui:draw()
