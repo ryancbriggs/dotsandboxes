@@ -63,10 +63,10 @@ end
 local function drawSettings()
     gfx.setColor(gfx.kColorBlack)
     gfx.drawText("Settings", 40, 40)
-    gfx.drawText("Board size (dots / side):", 40, 80)
+    gfx.drawText("Board size (dots per side):", 40, 80)
     gfx.drawText(string.format("<  %d  >", numDots), 40, 110)
-    gfx.drawText("◄ / ►  to change", 40, 150)
-    gfx.drawText("A or B  to save / back", 40, 170)
+    gfx.drawText("left or right to change", 40, 150)
+    gfx.drawText("A or B to save and go back", 40, 170)
 end
 
 local function handleSettingsInput()
