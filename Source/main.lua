@@ -3,6 +3,29 @@
 import "CoreLibs/graphics"
 import "CoreLibs/sprites"
 import "CoreLibs/timer"
+local sound = import "sound"    -- your sound.lua
+
+-- one handler for ALL button-press sounds
+local globalButtonHandler = {
+    -- arrow keys → “basic” click
+    leftButtonDown = function()  sound.basic()  return false end,
+    rightButtonDown = function() sound.basic()  return false end,
+    upButtonDown = function()    sound.basic()  return false end,
+    downButtonDown = function()  sound.basic()  return false end,
+
+    -- A or B → “select” click
+    AButtonDown = function()     sound.select() return false end,
+    BButtonDown = function()     sound.select() return false end,
+}
+
+playdate.inputHandlers.push(globalButtonHandler)
+
+function playdate.update()
+    -- your existing update loop:
+    -- e.g. UI:update()
+    playdate.timer.updateTimers()
+    gfx.sprite.update()
+end
 
 local gfx = playdate.graphics
 
