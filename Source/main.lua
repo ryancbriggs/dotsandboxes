@@ -1,4 +1,4 @@
--- main.lua – settings screen + reliable “Main Menu” return
+-- main.lua – reliable Main‑Menu return + settings persistence
 
 import "CoreLibs/graphics"
 import "CoreLibs/sprites"
@@ -18,21 +18,25 @@ local numDots   = settings.numDots        -- working copy while running
 ---------------------------------------------------------------------
 -- Global state -----------------------------------------------------
 ---------------------------------------------------------------------
-local appState       = "menu"             -- "menu", "settings", "pvc", "pvp"
+local appState       = "menu"             -- "menu","settings","pvc","pvp"
 local menuOptions    = { "1 Player", "2 Player", "Settings" }
 local selectedOption = 1
 local ui             = nil               -- set when a game starts
-local gotoMenuLater  = false             -- handled in gameWillResume()
+
+---------------------------------------------------------------------
+-- Easy helper to go home -------------------------------------------
+---------------------------------------------------------------------
+local function returnToMainMenu()
+    appState       = "menu"
+    ui             = nil
+    selectedOption = 1
+end
 
 ---------------------------------------------------------------------
 -- System‑menu entry ------------------------------------------------
 ---------------------------------------------------------------------
 local systemMenu = playdate.getSystemMenu()
-systemMenu:addMenuItem("Main Menu", function()
-    -- Runs **while the game is paused**, right after the user
-    -- taps the item but *before* the game resumes.
-    gotoMenuLater = true
-end)
+systemMenu:addMenuItem("Main Menu", returnToMainMenu)
 
 ---------------------------------------------------------------------
 -- Dependencies -----------------------------------------------------
@@ -75,20 +79,7 @@ local function handleSettingsInput()
         -- persist & return to menu
         settings.numDots = numDots
         playdate.datastore.write(settings, "settings")
-        appState        = "menu"
-        selectedOption  = 1
-    end
-end
-
----------------------------------------------------------------------
--- Handle return from the system menu -------------------------------
----------------------------------------------------------------------
-function playdate.gameWillResume()
-    if gotoMenuLater then
-        appState       = "menu"
-        ui             = nil
-        selectedOption = 1
-        gotoMenuLater  = false
+        returnToMainMenu()
     end
 end
 
