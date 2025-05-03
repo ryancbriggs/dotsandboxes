@@ -1,0 +1,6 @@
+name = Dots & Boxes
+author = Ryan Briggs
+description = Minimal dots‑and‑boxes implementation in Lua
+bundleID = com.ryan.dotsandboxes
+version = 1.0
+buildNumber = 1
