@@ -3,25 +3,34 @@
 local synth = playdate.sound.synth
 local M = {}
 
--- 1) Basic arrow‑key click: soft triangle pulse
+-- 1) Basic arrow‑key click: little noise click
 do
-    local click = synth.new(playdate.sound.kWaveTriangle)  -- triangle waveform
-    click:setADSR(0.001, 0.02, 0, 0)                       -- quick percussive envelope
-    click:setVolume(0.2)                                  -- lower volume
+    local snap = playdate.sound.synth.new(playdate.sound.kWaveNoise)
+    -- instant attack, 5 ms decay straight to zero, tiny release to avoid clicks
+    snap:setADSR(0, 0.01, 0, 0.01)
+    snap:setEnvelopeCurvature(1)   -- exponential, gives a sharper transient
+    snap:setVolume(0.6)
+
     function M.basic()
-        click:playNote(440, nil, 0.05)                     -- A4 tone for 50 ms
+        -- pitch is ignored for noise, length just determines envelope timing
+        snap:playNote(440, nil, 0.02)  -- 20 ms total duration
     end
 end
 
--- 2) "Select" A‑button click: snappier sawtooth
+-- 2) A- and B‑button click: little percussive click
 do
-    local click = synth.new(playdate.sound.kWaveSawtooth) -- sawtooth waveform
-    click:setADSR(0.001, 0.01, 0.05, 0.01)                -- short sustain for snap
-    click:setVolume(0.3)
+    local snap = playdate.sound.synth.new(playdate.sound.kWaveNoise)
+    -- instant attack, 5 ms decay straight to zero, tiny release to avoid clicks
+    snap:setADSR(0, 0.01, 0, 0.05)
+    snap:setEnvelopeCurvature(1)   -- exponential, gives a sharper transient
+    snap:setVolume(0.7)
+
     function M.select()
-        click:playNote(660, nil, 0.1)                      -- E5 tone for 100 ms
+        -- pitch is ignored for noise, length just determines envelope timing
+        snap:playNote(440, nil, 0.04)  -- 20 ms total duration
     end
 end
+
 
 -- 3) "Done" completion click: layered square‑wave thump + noise burst
 do
