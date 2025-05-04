@@ -84,7 +84,6 @@ function UI.new(board)
 
     -- Initial state
     self.cursorEdge = 1
-    self.turnCount = 0
 
     playdate.display.setRefreshRate(20)
     return self
@@ -116,7 +115,6 @@ function UI:handleInput()
         self:buildCoordToEdge()
         self:buildBoxToCoord()
         self.cursorEdge = 1
-        self.turnCount = 0
         return
     end
 
@@ -145,11 +143,7 @@ function UI:handleInput()
 
     -- Play edge with A
     if playdate.buttonJustPressed(playdate.kButtonA) then
-        if self.board:playEdge(self.cursorEdge) then
-            self.turnCount = self.turnCount + 1
-            -- cursor stays where it is:
-            -- self.cursorEdge = seekFreeEdge(self.board, self.cursorEdge, 1)
-        end
+        self.board:playEdge(self.cursorEdge)
     end
 
 -- Toggle orientation with B
@@ -258,7 +252,6 @@ function UI:draw()
     gfx.drawText("Turn: P" .. self.board.currentPlayer, 5, 20)
     gfx.drawText("P1: " .. self.board.score[1], 5, 40)
     gfx.drawText("P2: " .. self.board.score[2], 5, 60)
-    gfx.drawText("Turn Num: " .. self.turnCount, 5, 80)
 
     -- Game Over banner (text-only strip with grey outline)
     if self.board:isGameOver() then
