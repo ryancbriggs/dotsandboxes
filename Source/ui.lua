@@ -235,13 +235,15 @@ function UI:draw()
                 cx2, cy2 = dotXY(self, rr + 1, cc)
             end
             if cx1 and cy1 and cx2 and cy2 then
-                -- draw the cursor by XOR’ing pixels under it
-                gfx.setLineWidth(2)
-                gfx.setStrokeLocation(gfx.kStrokeCentered)
-
-                gfx.setColor(gfx.kColorXOR)        -- kColorXOR inverts existing pixels
+                -- white border
+                gfx.setLineWidth(4)
+                gfx.setColor(gfx.kColorWhite)
                 gfx.drawLine(cx1, cy1, cx2, cy2)
 
+                -- black center
+                gfx.setLineWidth(2)
+                gfx.setColor(gfx.kColorBlack)
+                gfx.drawLine(cx1, cy1, cx2, cy2)
                 -- restore your normal color for subsequent drawing
                 gfx.setColor(gfx.kColorBlack)
             end
