@@ -152,12 +152,36 @@ function UI:handleInput()
         end
     end
 
-    -- Toggle orientation with B
+-- Toggle orientation with B
     if playdate.buttonJustPressed(playdate.kButtonB) then
         local altDir = (dir == self.board.H) and self.board.V or self.board.H
-        local altEdge = self.coordToEdge[r][c][altDir]
-        if altEdge then self.cursorEdge = altEdge end
-    end
+
+        -- try rotating in place
+        local altEdge = self.coordToEdge[r]
+            and self.coordToEdge[r][c]
+            and self.coordToEdge[r][c][altDir]
+
+        if not altEdge then
+            -- adjust so rotation stays on-board
+            local adjR, adjC = r, c
+            if altDir == self.board.H then
+                -- moving to horizontal, max column is DOTS-1
+                adjC = math.min(c, self.board.DOTS - 1)
+            else
+                -- moving to vertical, max row is DOTS-1
+                adjR = math.min(r, self.board.DOTS - 1)
+            end
+            altEdge = self.coordToEdge[adjR]
+                and self.coordToEdge[adjR][adjC]
+                and self.coordToEdge[adjR][adjC][altDir]
+        end  -- closes `if not altEdge then`
+
+        if altEdge then
+            self.cursorEdge = altEdge
+        end  -- closes `if altEdge then`
+
+    end  -- closes `if playdate.buttonJustPressed … then`
+
 end
 
 -------------------------------------------------------------------------------
