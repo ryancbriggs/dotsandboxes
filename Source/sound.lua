@@ -9,7 +9,7 @@ do
     -- instant attack, 5 ms decay straight to zero, tiny release to avoid clicks
     snap:setADSR(0, 0.01, 0, 0.01)
     snap:setEnvelopeCurvature(1)   -- exponential, gives a sharper transient
-    snap:setVolume(0.6)
+    snap:setVolume(0.7)
 
     function M.basic()
         -- pitch is ignored for noise, length just determines envelope timing
@@ -23,7 +23,7 @@ do
     -- instant attack, 5 ms decay straight to zero, tiny release to avoid clicks
     snap:setADSR(0, 0.01, 0, 0.05)
     snap:setEnvelopeCurvature(1)   -- exponential, gives a sharper transient
-    snap:setVolume(0.7)
+    snap:setVolume(0.8)
 
     function M.select()
         -- pitch is ignored for noise, length just determines envelope timing
