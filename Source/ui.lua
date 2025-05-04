@@ -235,9 +235,34 @@ function UI:draw()
     gfx.drawText("P1: " .. self.board.score[1], 5, 40)
     gfx.drawText("P2: " .. self.board.score[2], 5, 60)
     gfx.drawText("Turn Num: " .. self.turnCount, 5, 80)
+
+    -- Game Over banner (text-only strip with grey outline)
     if self.board:isGameOver() then
-        gfx.drawText("Game Over (A to restart)", 5, 100)
+        local msg = "Game Over (A to restart)"
+        local f   = gfx.getSystemFont()
+        local tw, th = f:getTextWidth(msg), f:getHeight()
+        local padX, padY = 10, 5
+        local w, h = tw + padX*2, th + padY*2
+        local bs = (self.board.DOTS - 1) * self.spacing
+        local x = self.left + (bs - w)/2
+        local y = self.top  + (bs - h)/2
+
+        -- background
+        gfx.setDitherPattern(0)               -- solid fill
+        gfx.setColor(gfx.kColorWhite)
+        gfx.fillRect(x, y, w, h)
+
+        -- grey outline (50% dither)
+        gfx.setDitherPattern(0.5)
+        gfx.setColor(gfx.kColorBlack)
+        gfx.drawRect(x, y, w, h)
+        gfx.setDitherPattern(0)               -- reset pattern
+
+        -- text on top
+        gfx.setColor(gfx.kColorBlack)
+        gfx.drawText(msg, x + padX, y + padY)
     end
+
 end
 
 -------------------------------------------------------------------------------
