@@ -34,7 +34,7 @@ local gfx = playdate.graphics
 ---------------------------------------------------------------------
 local DEFAULT_SETTINGS = { numDots = 6 }
 local settings  = playdate.datastore.read("settings") or {}
-settings.numDots = math.min(8, math.max(4,
+settings.numDots = math.min(8, math.max(3,
                  settings.numDots or DEFAULT_SETTINGS.numDots))
 local numDots   = settings.numDots        -- working copy while running
 
@@ -94,7 +94,7 @@ end
 
 local function handleSettingsInput()
     if playdate.buttonJustPressed(playdate.kButtonLeft) then
-        numDots = math.max(4, numDots - 1)
+        numDots = math.max(3, numDots - 1)
     elseif playdate.buttonJustPressed(playdate.kButtonRight) then
         numDots = math.min(8, numDots + 1)
     elseif playdate.buttonJustPressed(playdate.kButtonA)

@@ -6,7 +6,7 @@ Board.__index = Board
 -------------------------------------------------------------------------------
 function Board.new(dots)
     dots = dots or 6
-    assert(dots >= 4 and dots <= 8, "dots must be between 4 and 8")
+    assert(dots >= 3 and dots <= 8, "dots must be between 3 and 8")
     local self = setmetatable({}, Board)
 
     -- Public constants ------------------------------------------------------
