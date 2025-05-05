@@ -12,6 +12,12 @@ local Ai    = import "ai"
 local gfx = playdate.graphics
 
 -- ---------------------------------------------------------------------------
+-- ⇦ NEW: load the title‑logo once at start‑up -------------------------------
+-- (leave off “.png” – the compiled .pdi will be picked up automatically)
+local LOGO_IMG   <const> = gfx.image.new("images/logjam")
+local LOGO_W     <const> = LOGO_IMG:getSize()
+
+-- ---------------------------------------------------------------------------
 -- One global input handler only for click sounds -----------------------------
 -- ---------------------------------------------------------------------------
 local click = { leftButtonDown  = sound.basic,
@@ -119,13 +125,18 @@ function playdate.update()
     gfx.clear()
 
     if appState == "menu" then
+        -- ⇦ NEW: draw the logo centred at top of screen ----------------------
+        LOGO_IMG:draw(math.floor((400-LOGO_W)/2), 8)   -- 8px down for breathing room
+
         gfx.setColor(gfx.kColorBlack)
-        gfx.drawText("Select Mode:", 40, 40)
+        gfx.drawText("Select Mode:", 40, 90)           -- shift text down a bit
+
         for i,label in ipairs(menuOptions) do
-            local y = 80 + (i-1)*30
+            local y = 130 + (i-1)*30
             gfx.drawText(((i==selectedOption) and "> " or "  ") .. label, 40, y)
         end
 
+        -- menu input --------------------------------------------------------
         if playdate.buttonJustPressed(playdate.kButtonDown) then selectedOption = selectedOption % #menuOptions + 1
         elseif playdate.buttonJustPressed(playdate.kButtonUp) then selectedOption = (selectedOption-2) % #menuOptions + 1
         elseif playdate.buttonJustPressed(playdate.kButtonA) then

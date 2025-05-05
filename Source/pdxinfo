@@ -1,6 +1,6 @@
 name = Dots & Boxes
 author = Ryan Briggs
-description = Minimal dots‑and‑boxes implementation in Lua
+description = A dots‑and‑boxes game for Playdate
 bundleID = com.ryan.dotsandboxes
 version = 1.0
 buildNumber = 1
