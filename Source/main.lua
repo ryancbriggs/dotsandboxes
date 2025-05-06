@@ -137,11 +137,25 @@ function playdate.update()
     elseif appState == "settings" then
         handleSettingsInput(); drawSettings()
 
-    else  -- gameplay
-        ui:handleInput()
-        if ui.mode=="pvc" and ui.board.currentPlayer==2 and not ui.board:isGameOver() then
+    else  -- gameplay, only let the human move the cursor / place lines
+        -- Always accept input if the game is over (to let “A to restart” work),
+        -- or if it’s the human’s turn (PvP or PvC player).
+        if ui.board:isGameOver()
+            or ui.mode=="pvp"
+            or (ui.mode=="pvc" and ui.board.currentPlayer==1)
+        then
+            ui:handleInput()
+        end
+
+        -- If we're in player‑vs‑computer and it's the AI’s turn, make its move
+        if ui.mode=="pvc"
+            and ui.board.currentPlayer==2
+            and not ui.board:isGameOver()
+        then
             local mv = Ai.chooseMove(ui.board)
-            if mv then ui.board:playEdge(mv) end
+            if mv then
+                ui.board:playEdge(mv)
+            end
         end
         ui:draw()
     end
