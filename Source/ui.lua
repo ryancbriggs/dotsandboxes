@@ -249,24 +249,36 @@ function UI:draw()
 
     -- Side‑column scores
     do
-        local sw,sh = playdate.display.getSize()
-        local dw,dh = 3*DIGIT_SCALE, 5*DIGIT_SCALE
-        local sy = sh/2 - dh/2
+        local sw, sh = playdate.display.getSize()
+        local dw, dh = 3*DIGIT_SCALE, 5*DIGIT_SCALE
+        local sy    = sh/2 - dh/2
+
         local function drawScore(val, px, active)
             local s = tostring(val)
-            local totalW = #s*(dw + DIGIT_SCALE) - DIGIT_SCALE
-            local sx = px + (SIDE_COL_W - totalW)/2
-            for i=1,#s do
-                drawChunkyDigit(tonumber(s:sub(i,i)), sx + (i-1)*(dw+DIGIT_SCALE), sy, DIGIT_SCALE)
+            local totalW = #s * (dw + DIGIT_SCALE) - DIGIT_SCALE
+            local sx     = px + (SIDE_COL_W - totalW) / 2
+
+            -- draw digits
+            for i = 1, #s do
+                drawChunkyDigit(
+                tonumber(s:sub(i,i)),
+                sx + (i-1)*(dw + DIGIT_SCALE),
+                sy,
+                DIGIT_SCALE
+                )
             end
-            if active and self.pulseCounter < self.pulseMax/2 then
-                gfx.setDitherPattern(0.5)
-                gfx.fillRect(px+5, sy+dh+2, SIDE_COL_W-10, 2)
-                gfx.setDitherPattern(0)
+
+            -- static underline for active player
+            if active then
+                local ux, uy = px + 5,    sy + dh + 2
+                local uw, uh = SIDE_COL_W - 10, 2
+                gfx.setColor(gfx.kColorBlack)
+                gfx.fillRect(ux, uy, uw, uh)
             end
         end
-        drawScore(p1Score, 0,   self.board.currentPlayer==1)
-        drawScore(p2Score, sw-SIDE_COL_W, self.board.currentPlayer==2)
+
+        drawScore(p1Score,               0,               self.board.currentPlayer == 1)
+        drawScore(p2Score, sw - SIDE_COL_W, self.board.currentPlayer == 2)
     end
 
     -- Game‑over
