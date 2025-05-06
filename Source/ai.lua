@@ -184,40 +184,55 @@ function Ai.setDifficulty(level)
     end
 end
 
+-- chooseMove
 function Ai.chooseMove(board)
-    --------------------------------------------------------------------------
-    -- Shared logic for Easy / Medium / (early‑game Hard) -------------------
-    --------------------------------------------------------------------------
-    local closers = edgesThatCloseBox(board); if #closers > 0 then return closers[1] end
-    local safe    = safeEdges(board)
-    if #safe > 0 then
-        return (Ai.difficulty == "medium") and bestSafeEdge(board, safe)
-                                            or  safe[math.random(#safe)]
+    ----------------------------------------------------------------------
+    -- 0. Expert: full solver right away ----------------------------------
+    ----------------------------------------------------------------------
+    if Ai.difficulty == "expert" then
+        return chooseHardMove(board)        -- uses solver on every turn
     end
 
-    --------------------------------------------------------------------------
-    -- Easy: 5 % pure blunders ----------------------------------------------
-    --------------------------------------------------------------------------
+    ----------------------------------------------------------------------
+    -- 1. Easy: 5 % random blunder BEFORE any smart checks --------------
+    ----------------------------------------------------------------------
     if Ai.difficulty == "easy" and randomChance(0.05) then
         local free = listFreeEdges(board)
         return (#free > 0) and free[math.random(#free)] or nil
     end
 
-    --------------------------------------------------------------------------
-    -- Hard: activate solver once safe‑edge pool is half depleted -----------
-    --------------------------------------------------------------------------
+    ----------------------------------------------------------------------
+    -- 2. Take a guaranteed box if one exists ---------------------------
+    ----------------------------------------------------------------------
+    local closers = edgesThatCloseBox(board)
+    if #closers > 0 then return closers[1] end
+
+    ----------------------------------------------------------------------
+    -- 3. Safe edges -----------------------------------------------------
+    ----------------------------------------------------------------------
+    local safe = safeEdges(board)
+    if #safe > 0 then
+        if Ai.difficulty == "medium" or Ai.difficulty == "hard" then
+            return bestSafeEdge(board, safe)   -- ordered by heuristic
+        else
+            return safe[math.random(#safe)]    -- remaining case: easy
+        end
+    end
+
+    ----------------------------------------------------------------------
+    -- 4. Hard: switch to solver when the pool of safe edges is small ---
+    ----------------------------------------------------------------------
     if Ai.difficulty == "hard" then
-        local safe = safeEdges(board)
-        local n    = board.DOTS         -- dots per side
-        if #safe <= n * n / 2 then
+        local n = board.DOTS
+        if #safe <= n * n / 2 then    -- safe is empty here, but keep test
             return chooseHardMove(board)
         end
     end
 
-    --------------------------------------------------------------------------
-    -- Expert: full solver from the first move ------------------------------
-    --------------------------------------------------------------------------
-    if Ai.difficulty == "expert" then
+    ----------------------------------------------------------------------
+    -- 5. Nothing safe left: solver or random ---------------------------
+    ----------------------------------------------------------------------
+    if Ai.difficulty ~= "easy" then    -- medium / hard with no safe edges
         return chooseHardMove(board)
     end
 
