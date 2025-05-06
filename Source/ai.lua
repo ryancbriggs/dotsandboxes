@@ -125,48 +125,47 @@ local function negamax(vals,cache)
     end
     cache[key] = best; return best
 end
+-- Negamax with random ties
 local function chooseNegamaxMove(board)
-    local closers = edgesThatCloseBox(board)
-    if #closers>0 then return closers[1] end
-    local safeList = safeEdges(board)
-    if #safeList>0 then return bestSafeEdge(board,safeList) end
-    local comps = collectHotComponents(board)
-    if #comps==0 then return listFreeEdges(board)[1] end
-    local vals, edges = {},{}
-    for i,c in ipairs(comps) do vals[i],edges[i] = compValue(c),c.edge end
-    local cache, best, bi = {}, -64, 1
-    for i,v in ipairs(vals) do
-        local last = table.remove(vals)
-        local s = -negamax(vals,cache) - v
-        table.insert(vals, last)
-        if s>best then best,bi = s,i end
-    end
-    return edges[bi]
+  local closers = edgesThatCloseBox(board)
+  if #closers > 0 then return closers[math.random(#closers)] end
+  local safeList = safeEdges(board)
+  if #safeList > 0 then return bestSafeEdge(board, safeList) end
+  local comps = collectHotComponents(board)
+  if #comps == 0 then local free = listFreeEdges(board) return free[math.random(#free)] end
+  local vals, edges = {}, {}
+  for i,c in ipairs(comps) do vals[i], edges[i] = compValue(c), c.edge end
+  local cache, best, bestIdxs = {}, -math.huge, {}
+  for i=1,#vals do
+    local v = table.remove(vals, i)
+    local sc = -negamax(vals,cache) - v
+    table.insert(vals, i, v)
+    if sc > best then best, bestIdxs = sc, {i}
+    elseif sc == best then table.insert(bestIdxs, i) end
+  end
+  local choice = bestIdxs[ math.random(#bestIdxs) ]
+  return edges[choice]
 end
 
--- Flood-fill free-edge regions (Expert split detection) ----------------------
+-- Flood-fill free-edge regions ----------------------------------------------
 local function freeEdgeRegions(board)
     local all = listFreeEdges(board)
-    local visited, regions = {},{}
+    local visited, regions = {}, {}
     local function adjacent(e1,e2)
         for _,b1 in ipairs(board.edgeBoxes[e1] or {}) do
-            for _,b2 in ipairs(board.edgeBoxes[e2] or {}) do
-                if b1==b2 then return true end
-            end
+            for _,b2 in ipairs(board.edgeBoxes[e2] or {}) do if b1==b2 then return true end end
         end
         return false
     end
     for _,e in ipairs(all) do
         if not visited[e] then
-            visited[e] = true
-            local stack, comp = {e},{}
+            visited[e]=true
+            local stack, comp = {e}, {}
             while #stack>0 do
                 local x = table.remove(stack)
-                table.insert(comp,x)
+                table.insert(comp, x)
                 for _,y in ipairs(all) do
-                    if not visited[y] and adjacent(x,y) then
-                        visited[y]=true; table.insert(stack,y)
-                    end
+                    if not visited[y] and adjacent(x,y) then visited[y]=true; table.insert(stack,y) end
                 end
             end
             table.insert(regions, comp)
@@ -175,72 +174,66 @@ local function freeEdgeRegions(board)
     return regions
 end
 
--- Berlekamp Nim-sum solver (Expert endgame) ---------------------------------
+-- Berlekamp Nim-sum solver -----------------------------------------------
 local function chooseBerlekampMove(board, comps)
     local xor = 0
     for _, c in ipairs(comps) do
         local heap = c.isLoop and 1 or (c.len - 1)
         xor = xor ~ heap
     end
+    local candidates = {}
     if xor~=0 then
         for _, c in ipairs(comps) do
-            if not c.isLoop then
-                local h = c.len - 1
-                if (h ~ xor) < h then return c.edge end
-            end
+            if not c.isLoop then local h=c.len-1 if (h~xor)<h then table.insert(candidates,c.edge) end end
         end
     else
-        for _, c in ipairs(comps) do
-            if not c.isLoop and c.len>2 then return c.edge end
-        end
+        for _, c in ipairs(comps) do if not c.isLoop and c.len>2 then table.insert(candidates,c.edge) end end
     end
-    return comps[1] and comps[1].edge or listFreeEdges(board)[1]
+    if #candidates>0 then return candidates[math.random(#candidates)] end
+    return (comps[1] and comps[1].edge) or listFreeEdges(board)[1]
 end
 
--- Difficulty-specific choosers ----------------------------------------------
+-- Difficulty-specific choosers --------------------------------------------
 local function chooseEasyMove(board)
-    if randomChance(0.05) then
-        local f = listFreeEdges(board)
-        return f[math.random(#f)]
-    end
-    local c = edgesThatCloseBox(board)
-    if #c>0 then return c[1] end
-    local s = safeEdges(board)
-    if #s>0 then return s[math.random(#s)] end
+    if randomChance(0.05) then return listFreeEdges(board)[math.random(#listFreeEdges(board))] end
+    local c=edgesThatCloseBox(board) if #c>0 then return c[1] end
+    local s=safeEdges(board) if #s>0 then return s[math.random(#s)] end
     return listFreeEdges(board)[1]
 end
 
 local function chooseMediumMove(board)
-    local c = edgesThatCloseBox(board)
-    if #c>0 then return c[1] end
-    local s = safeEdges(board)
-    if #s>0 then return bestSafeEdge(board,s) end
+    local c=edgesThatCloseBox(board) if #c>0 then return c[math.random(#c)] end
+    local s=safeEdges(board) if #s>0 then return bestSafeEdge(board,s) end
     return chooseNegamaxMove(board)
 end
 
 local function chooseHardMove(board)
-    local c = edgesThatCloseBox(board)
-    if #c>0 then return c[1] end
-    local s = safeEdges(board)
-    if #s>board.DOTS*board.DOTS/2 then return bestSafeEdge(board,s) end
+    local c=edgesThatCloseBox(board) if #c>0 then return c[1] end
+    if #freeEdgeRegions(board)>1 then return chooseNegamaxMove(board) end
+    local s=safeEdges(board) if #s>board.DOTS*board.DOTS/2 then return bestSafeEdge(board,s) end
     return chooseNegamaxMove(board)
 end
 
+-- Updated Expert chooser -----------------------------------------------
 local function chooseExpertMove(board)
-  -- 1) are we still totally open?  (no chains, no split)
-  local comps = collectHotComponents(board)
-  if #comps == 0 then
-      local regs = freeEdgeRegions(board)
-      if #regs == 1 then
-          -- still one big region and no 3‑sided boxes → do full negamax solver
-          return chooseNegamaxMove(board)
-      end
-  end
-
-  -- 2) otherwise we've either split or a chain exists → switch to nim‑sum
-  --    (comps may be empty if split happened before any chain, so refetch)
-  local finalComps = collectHotComponents(board)
-  return chooseBerlekampMove(board, finalComps)
+    -- 1) Early: no chain yet AND one region? medium play
+    local comps = collectHotComponents(board)
+    if #comps == 0 then
+        local regs = freeEdgeRegions(board)
+        if #regs == 1 then
+            return chooseMediumMove(board)
+        end
+    end
+    -- 2) Endgame: chains or split
+    local finalComps = collectHotComponents(board)
+    if #finalComps == 0 then
+        -- split w/o chain: drain safe edges
+        local s = safeEdges(board)
+        if #s>0 then return bestSafeEdge(board,s) end
+        return chooseNegamaxMove(board)
+    end
+    -- 3) True chain: Nim-sum solver
+    return chooseBerlekampMove(board, finalComps)
 end
 
 -- Public API ----------------------------------------------------------------
@@ -253,12 +246,10 @@ function Ai.setDifficulty(level)
 end
 
 function Ai.chooseMove(board)
-  if     Ai.difficulty=="easy"   then return chooseEasyMove(board)
-  elseif Ai.difficulty=="medium" then return chooseMediumMove(board)
-  elseif Ai.difficulty=="hard"   then return chooseHardMove(board)
-  else                                -- expert
-    return chooseExpertMove(board)
-  end
+    if     Ai.difficulty=="easy"   then return chooseEasyMove(board)
+    elseif Ai.difficulty=="medium" then return chooseMediumMove(board)
+    elseif Ai.difficulty=="hard"   then return chooseHardMove(board)
+    else                                return chooseExpertMove(board) end
 end
 
 return Ai
