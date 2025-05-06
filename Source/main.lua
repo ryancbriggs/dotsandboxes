@@ -26,12 +26,12 @@ playdate.inputHandlers.push(click)
 -- ---------------------------------------------------------------------------
 -- Persistent settings --------------------------------------------------------
 -- ---------------------------------------------------------------------------
-local DEFAULT_SETTINGS = { numDots = 6, difficulty = "easy" }
+local DEFAULT_SETTINGS = { numDots = 6, difficulty = "medium" }
 local settings = playdate.datastore.read("settings") or {}
 settings.numDots = math.min(8, math.max(3, settings.numDots or DEFAULT_SETTINGS.numDots))
 
 -- validate difficulty string -------------------------------------------------
-local difficulties = { "easy", "medium", "hard" }
+local difficulties = { "easy", "medium", "hard", "expert" }
 local function isValidDiff(d) for _,v in ipairs(difficulties) do if d==v then return true end end end
 if not isValidDiff(settings.difficulty) then settings.difficulty = DEFAULT_SETTINGS.difficulty end
 
