@@ -1,4 +1,4 @@
--- ui.lua (complete, consolidated)
+-- ui.lua  – centred board, 3‑column layout with pulsing side‑column scores
 import "CoreLibs/graphics"
 import "CoreLibs/sprites"
 
@@ -8,13 +8,41 @@ local UI = {}
 UI.__index = UI
 
 -- Visual constants ----------------------------------------------------------
-local SCORE_MARGIN <const> = 60   -- left margin for HUD (px)
+local SIDE_COL_W   <const> = 60   -- width of each side column (px)
 local V_PADDING    <const> = 20   -- top & bottom padding (px)
-local LINE_WIDTH   <const> = 6    -- thickness of lines (px)
+local LINE_WIDTH   <const> = 6    -- line thickness (px)
 local DOT_SIZE     <const> = 4    -- radius of dots (px)
+local DIGIT_SCALE  <const> = 4    -- chunky‑digit scale factor
 
 -------------------------------------------------------------------------------
--- Build reverse lookups for edges and boxes
+-- CHUNKY 3×5 DIGIT BITMAP ---------------------------------------------------
+local DIGIT_BITS <const> = {
+    [0] = 31599, -- 0b111101101101111
+    11415,       -- 1
+    29671,       -- 2
+    29647,       -- 3
+    23497,       -- 4
+    31183,       -- 5
+    31215,       -- 6
+    29257,       -- 7
+    31727,       -- 8
+    31695        -- 9
+}
+local function drawChunkyDigit(n, x, y, scale)
+    local bits = DIGIT_BITS[n]
+    if not bits then return end
+    for row = 0, 4 do
+        for col = 0, 2 do
+            local bitPos = 14 - (row*3 + col)
+            if ((bits >> bitPos) & 1) == 1 then
+                gfx.fillRect(x + col*scale, y + row*scale, scale, scale)
+            end
+        end
+    end
+end
+
+-------------------------------------------------------------------------------
+-- Build reverse look‑ups for edges and boxes
 -------------------------------------------------------------------------------
 function UI:buildCoordToEdge()
     self.coordToEdge = {}
@@ -31,19 +59,18 @@ function UI:buildBoxToCoord()
     local idx = 1
     for r = 1, self.board.DOTS - 1 do
         for c = 1, self.board.DOTS - 1 do
-            self.boxToCoord[idx] = {r, c}
+            self.boxToCoord[idx] = { r, c }
             idx = idx + 1
         end
     end
 end
 
 -------------------------------------------------------------------------------
--- Convert grid coords to pixel coords
+-- Convert dot grid coords to pixel coords
 -------------------------------------------------------------------------------
 local function dotXY(self, r, c)
-    local x = self.left + (c - 1) * self.spacing
-    local y = self.top  + (r - 1) * self.spacing
-    return x, y
+    return self.left + (c - 1) * self.spacing,
+           self.top  + (r - 1) * self.spacing
 end
 
 -------------------------------------------------------------------------------
@@ -67,51 +94,39 @@ function UI.new(board)
     local self = setmetatable({}, UI)
     self.board = board
 
-    -- Build lookups
+    -- Build look‑ups
     self:buildCoordToEdge()
     self:buildBoxToCoord()
 
-    -- Compute spacing & offsets
+    -- Spacing & offsets
     local screenW, screenH = playdate.display.getSize()
     local dots = board.DOTS
-    local maxW = math.floor((screenW - SCORE_MARGIN) / (dots - 1))
-    local maxH = math.floor((screenH - 2 * V_PADDING) / (dots - 1))
+    local maxW = math.floor((screenW - 2*SIDE_COL_W) / (dots - 1))
+    local maxH = math.floor((screenH - 2*V_PADDING) / (dots - 1))
     self.spacing = math.min(maxW, maxH)
 
-    self.left = SCORE_MARGIN + math.floor((screenW - SCORE_MARGIN - (dots - 1) * self.spacing) / 2)
-    local availH = screenH - 2 * V_PADDING
-    self.top = V_PADDING + math.floor((availH - (dots - 1) * self.spacing) / 2)
+    local boardSide = (dots - 1) * self.spacing
+    self.left = SIDE_COL_W + math.floor((screenW - 2*SIDE_COL_W - boardSide) / 2)
+    local availH = screenH - 2*V_PADDING
+    self.top = V_PADDING + math.floor((availH - boardSide) / 2)
 
-    -- Initial state
+    -- Cursor & pulse
     self.cursorEdge = 1
+    self.pulseCounter = 0
+    self.pulseMax = 20
 
     playdate.display.setRefreshRate(20)
     return self
 end
 
 -------------------------------------------------------------------------------
--- Find next free edge
--------------------------------------------------------------------------------
-local function seekFreeEdge(board, startEdge, delta)
-    local total = #board.edgeToCoord
-    local e = startEdge
-    for _ = 1, total do
-        e = ((e - 1 + delta) % total) + 1
-        if not board:edgeIsFilled(e) then
-            return e
-        end
-    end
-    return startEdge
-end
-
--------------------------------------------------------------------------------
 -- Handle input
 -------------------------------------------------------------------------------
 function UI:handleInput()
-    -- Restart if game over and A pressed
+    -- Restart after game over
     if playdate.buttonJustPressed(playdate.kButtonA) and self.board:isGameOver() then
-        local boardClass = getmetatable(self.board).__index
-        self.board = boardClass.new(self.board.DOTS)
+        local Board = getmetatable(self.board).__index
+        self.board = Board.new(self.board.DOTS)
         self:buildCoordToEdge()
         self:buildBoxToCoord()
         self.cursorEdge = 1
@@ -123,59 +138,40 @@ function UI:handleInput()
     if not coords then return end
     local r, c, dir = table.unpack(coords)
 
-    -- Move cursor with wrapping
-    local maxR = (dir == self.board.H) and self.board.DOTS or (self.board.DOTS - 1)
-    local maxC = (dir == self.board.H) and (self.board.DOTS - 1) or self.board.DOTS
+    -- D‑pad wrap
+    local maxR = (dir == self.board.H) and self.board.DOTS or self.board.DOTS-1
+    local maxC = (dir == self.board.H) and self.board.DOTS-1 or self.board.DOTS
     local newR, newC = r, c
-    if playdate.buttonJustPressed(playdate.kButtonLeft) then
-        newC = (c - 2) % maxC + 1
-    elseif playdate.buttonJustPressed(playdate.kButtonRight) then
-        newC = c % maxC + 1
-    elseif playdate.buttonJustPressed(playdate.kButtonUp) then
-        newR = (r - 2) % maxR + 1
-    elseif playdate.buttonJustPressed(playdate.kButtonDown) then
-        newR = r % maxR + 1
-    end
-    if newR ~= r or newC ~= c then
-        local edge = self.coordToEdge[newR][newC][dir]
-        if edge then self.cursorEdge = edge end
+    if playdate.buttonJustPressed(playdate.kButtonLeft)  then newC = (c-2)%maxC+1 end
+    if playdate.buttonJustPressed(playdate.kButtonRight) then newC = c%maxC+1 end
+    if playdate.buttonJustPressed(playdate.kButtonUp)    then newR = (r-2)%maxR+1 end
+    if playdate.buttonJustPressed(playdate.kButtonDown)  then newR = r%maxR+1 end
+
+    if newR~=r or newC~=c then
+        local e = self.coordToEdge[newR] and self.coordToEdge[newR][newC] and
+                  self.coordToEdge[newR][newC][dir]
+        if e then self.cursorEdge = e end
     end
 
-    -- Play edge with A
+    -- Claim edge
     if playdate.buttonJustPressed(playdate.kButtonA) then
         self.board:playEdge(self.cursorEdge)
     end
 
--- Toggle orientation with B
+    -- Rotate orientation with B
     if playdate.buttonJustPressed(playdate.kButtonB) then
-        local altDir = (dir == self.board.H) and self.board.V or self.board.H
-
-        -- try rotating in place
-        local altEdge = self.coordToEdge[r]
-            and self.coordToEdge[r][c]
-            and self.coordToEdge[r][c][altDir]
-
-        if not altEdge then
-            -- adjust so rotation stays on-board
-            local adjR, adjC = r, c
-            if altDir == self.board.H then
-                -- moving to horizontal, max column is DOTS-1
-                adjC = math.min(c, self.board.DOTS - 1)
-            else
-                -- moving to vertical, max row is DOTS-1
-                adjR = math.min(r, self.board.DOTS - 1)
-            end
-            altEdge = self.coordToEdge[adjR]
-                and self.coordToEdge[adjR][adjC]
-                and self.coordToEdge[adjR][adjC][altDir]
-        end  -- closes `if not altEdge then`
-
-        if altEdge then
-            self.cursorEdge = altEdge
-        end  -- closes `if altEdge then`
-
-    end  -- closes `if playdate.buttonJustPressed … then`
-
+        local altDir = (dir==self.board.H) and self.board.V or self.board.H
+        local e2 = self.coordToEdge[r] and self.coordToEdge[r][c] and
+                   self.coordToEdge[r][c][altDir]
+        if not e2 then
+            local ar, ac = r, c
+            if altDir==self.board.H then ac = math.min(c, self.board.DOTS-1)
+            else                  ar = math.min(r, self.board.DOTS-1) end
+            e2 = self.coordToEdge[ar] and self.coordToEdge[ar][ac] and
+                 self.coordToEdge[ar][ac][altDir]
+        end
+        if e2 then self.cursorEdge = e2 end
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -185,15 +181,25 @@ function UI:draw()
     gfx.clear()
     gfx.setColor(gfx.kColorBlack)
 
-    -- Draw dots
-    for rr = 1, self.board.DOTS do
-        for cc = 1, self.board.DOTS do
-            local x, y = dotXY(self, rr, cc)
-            gfx.fillCircleAtPoint(x, y, DOT_SIZE)
+    -- Tally scores -----------------------------------------
+    local p1Score, p2Score = 0, 0
+    for _, owner in pairs(self.board.boxOwner) do
+        if owner == 1 then
+            p1Score = p1Score + 1
+        elseif owner == 2 then
+            p2Score = p2Score + 1
         end
     end
 
-    -- Draw edges
+    -- Dots
+    for rr=1,self.board.DOTS do 
+        for cc=1,self.board.DOTS do
+            local x,y = dotXY(self, rr, cc)
+            gfx.fillCircleAtPoint(x, y, DOT_SIZE)
+        end  
+    end
+
+    -- Edges -------------------------------------------------
     for e = 1, #self.board.edgeToCoord do
         if self.board:edgeIsFilled(e) then
             local rr, cc, d = table.unpack(self.board.edgeToCoord[e])
@@ -210,83 +216,77 @@ function UI:draw()
             gfx.setDitherPattern(0)
         end
     end
-
-    -- Draw claimed boxes
-    for boxId, bc in ipairs(self.boxToCoord) do
-        local owner = self.board.boxOwner[boxId] or 0
-        if owner > 0 then
-            local br, bc = table.unpack(bc)
-            local cx = self.left + (bc - 1) * self.spacing + self.spacing/2
-            local cy = self.top  + (br - 1) * self.spacing + self.spacing/2
-            gfx.drawText(tostring(owner), cx - 4, cy - 6)
+    
+    -- Claimed boxes
+    for id,bc in ipairs(self.boxToCoord) do
+        local o = self.board.boxOwner[id]
+        if o then
+            local br,bc2 = table.unpack(bc)
+            local cx = self.left + (bc2-1)*self.spacing + self.spacing/2
+            local cy = self.top  + (br-1)*self.spacing + self.spacing/2
+            gfx.drawText(tostring(o), cx-4, cy-6)
         end
     end
 
-    -- Draw cursor on top
+    -- Cursor
     do
         local coords = self.board.edgeToCoord[self.cursorEdge]
         if coords then
-            local rr, cc, d = table.unpack(coords)
-            local cx1, cy1 = dotXY(self, rr, cc)
-            local cx2, cy2
-            if d == self.board.H then
-                cx2, cy2 = dotXY(self, rr, cc + 1)
+            local rr, cc, dir = table.unpack(coords)
+            local x1, y1 = dotXY(self, rr, cc)
+            local x2, y2
+            if dir == self.board.H then
+                x2, y2 = dotXY(self, rr, cc + 1)
             else
-                cx2, cy2 = dotXY(self, rr + 1, cc)
+                x2, y2 = dotXY(self, rr + 1, cc)
             end
-            if cx1 and cy1 and cx2 and cy2 then
-                -- white border
-                gfx.setLineWidth(4)
-                gfx.setColor(gfx.kColorWhite)
-                gfx.drawLine(cx1, cy1, cx2, cy2)
-
-                -- black center
-                gfx.setLineWidth(2)
-                gfx.setColor(gfx.kColorBlack)
-                gfx.drawLine(cx1, cy1, cx2, cy2)
-                -- restore your normal color for subsequent drawing
-                gfx.setColor(gfx.kColorBlack)
-            end
+            gfx.setLineWidth(4); gfx.setColor(gfx.kColorWhite)
+            gfx.drawLine(x1, y1, x2, y2)
+            gfx.setLineWidth(2); gfx.setColor(gfx.kColorBlack)
+            gfx.drawLine(x1, y1, x2, y2)
         end
     end
 
-    -- HUD
-    gfx.drawText("Turn: P" .. self.board.currentPlayer, 5, 20)
-    gfx.drawText("P1: " .. self.board.score[1], 5, 40)
-    gfx.drawText("P2: " .. self.board.score[2], 5, 60)
-
-    -- Game Over banner (text-only strip with grey outline)
-    if self.board:isGameOver() then
-        local msg = "Game Over (A to restart)"
-        local f   = gfx.getSystemFont()
-        local tw, th = f:getTextWidth(msg), f:getHeight()
-        local padX, padY = 10, 5
-        local w, h = tw + padX*2, th + padY*2
-        local bs = (self.board.DOTS - 1) * self.spacing
-        local x = self.left + (bs - w)/2
-        local y = self.top  + (bs - h)/2
-
-        -- background
-        gfx.setDitherPattern(0)               -- solid fill
-        gfx.setColor(gfx.kColorWhite)
-        gfx.fillRect(x, y, w, h)
-
-        -- grey outline (50% dither)
-        gfx.setDitherPattern(0.5)
-        gfx.setColor(gfx.kColorBlack)
-        gfx.drawRect(x, y, w, h)
-        gfx.setDitherPattern(0)               -- reset pattern
-
-        -- text on top
-        gfx.setColor(gfx.kColorBlack)
-        gfx.drawText(msg, x + padX, y + padY)
+    -- Side‑column scores
+    do
+        local sw,sh = playdate.display.getSize()
+        local dw,dh = 3*DIGIT_SCALE, 5*DIGIT_SCALE
+        local sy = sh/2 - dh/2
+        local function drawScore(val, px, active)
+            local s = tostring(val)
+            local totalW = #s*(dw + DIGIT_SCALE) - DIGIT_SCALE
+            local sx = px + (SIDE_COL_W - totalW)/2
+            for i=1,#s do
+                drawChunkyDigit(tonumber(s:sub(i,i)), sx + (i-1)*(dw+DIGIT_SCALE), sy, DIGIT_SCALE)
+            end
+            if active and self.pulseCounter < self.pulseMax/2 then
+                gfx.setDitherPattern(0.5)
+                gfx.fillRect(px+5, sy+dh+2, SIDE_COL_W-10, 2)
+                gfx.setDitherPattern(0)
+            end
+        end
+        drawScore(p1Score, 0,   self.board.currentPlayer==1)
+        drawScore(p2Score, sw-SIDE_COL_W, self.board.currentPlayer==2)
     end
 
+    -- Game‑over
+    if self.board:isGameOver() then
+        local msg = "Game Over (A to restart)"
+        local f = gfx.getSystemFont()
+        local tw,th = f:getTextWidth(msg), f:getHeight()
+        local px,py = self.left + ((self.board.DOTS-1)*self.spacing - tw -20)/2,
+                       self.top  + ((self.board.DOTS-1)*self.spacing - th -10)/2
+        gfx.setColor(gfx.kColorWhite); gfx.fillRect(px,py,tw+20,th+10)
+        gfx.setDitherPattern(0.5); gfx.setColor(gfx.kColorBlack)
+        gfx.drawRect(px,py,tw+20,th+10); gfx.setDitherPattern(0)
+        gfx.drawText(msg, px+10, py+5)
+    end
 end
 
 -------------------------------------------------------------------------------
 function UI:update()
     self:handleInput()
+    self.pulseCounter = (self.pulseCounter + 1) % self.pulseMax
     self:draw()
 end
 
