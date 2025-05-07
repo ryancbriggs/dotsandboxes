@@ -73,7 +73,9 @@ local selectedOption = 1
 local settingsCursor = 1      -- 1 = board size, 2 = difficulty, 3 = first player
 local ui = nil
 
+-- seed RNG once at load for general randomness --------------------------------
 math.randomseed(playdate.getSecondsSinceEpoch())
+math.random()
 
 -- helpers -------------------------------------------------------------------
 local function returnToMainMenu()
@@ -81,13 +83,14 @@ local function returnToMainMenu()
 end
 playdate.getSystemMenu():addMenuItem("Main Menu", returnToMainMenu)
 
+-- initialize a new game, applying first‑player selection --------------------
 local function initGame(mode)
     local board = Board.new(settings.numDots)
     ui       = UI.new(board)
     ui.mode  = mode
     appState = mode
     Ai.setDifficulty(settings.difficulty)
-    -- apply first‑player selection
+
     if settings.firstPlayer == "player1" then
         ui.board.currentPlayer = 1
     elseif settings.firstPlayer == "player2" then
@@ -123,7 +126,7 @@ local function drawSettings()
     gfx.drawText(mark .. "First player:", 40, rowY[3])
     gfx.drawText(string.format("<  %s  >", firstPlayerDisplay()), 280, rowY[3])
 
-    -- move save prompt below without overlap
+    -- save prompt
     gfx.drawText("Press A or B to save", 40, 200)
 end
 
@@ -193,9 +196,7 @@ function playdate.update()
     elseif appState == "settings" then
         handleSettingsInput(); drawSettings()
 
-    else  -- gameplay, only let the human move the cursor / place lines
-        -- Always accept input if the game is over (to let “A to restart” work),
-        -- or if it’s the human’s turn (PvP or PvC player).
+    else  -- gameplay
         if ui.board:isGameOver()
             or ui.mode=="pvp"
             or (ui.mode=="pvc" and ui.board.currentPlayer==1)
@@ -203,15 +204,12 @@ function playdate.update()
             ui:handleInput()
         end
 
-        -- If we're in player‑vs‑computer and it's the AI’s turn, make its move
         if ui.mode=="pvc"
             and ui.board.currentPlayer==2
             and not ui.board:isGameOver()
         then
             local mv = Ai.chooseMove(ui.board)
-            if mv then
-                ui.board:playEdge(mv)
-            end
+            if mv then ui.board:playEdge(mv) end
         end
         ui:draw()
     end
