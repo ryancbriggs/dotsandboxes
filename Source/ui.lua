@@ -88,6 +88,40 @@ local function drawThickLine(x1, y1, x2, y2)
 end
 
 -------------------------------------------------------------------------------
+-- Cursor highlight box (transparent center, tinted by player)
+-------------------------------------------------------------------------------
+function UI:drawCursor()
+    local coords = self.board.edgeToCoord[self.cursorEdge]
+    if not coords then return end
+    local rr, cc, dir = table.unpack(coords)
+    local x1, y1 = dotXY(self, rr, cc)
+    local x2, y2
+    if dir == self.board.H then
+        x2, y2 = dotXY(self, rr, cc + 1)
+    else
+        x2, y2 = dotXY(self, rr + 1, cc)
+    end
+
+    local pad = 8
+    local left   = math.min(x1, x2) - pad
+    local top    = math.min(y1, y2) - pad
+    local width  = math.abs(x2 - x1) + pad * 2
+    local height = math.abs(y2 - y1) + pad * 2
+
+    -- tint by current player
+    if self.board.currentPlayer == 1 then
+        gfx.setColor(gfx.kColorBlack)
+    else
+        gfx.setDitherPattern(0.5)
+    end
+    gfx.setLineWidth(3)
+    gfx.drawRect(left, top, width, height)
+
+    -- restore draw color
+    gfx.setColor(gfx.kColorBlack)
+end
+
+-------------------------------------------------------------------------------
 -- Constructor
 -------------------------------------------------------------------------------
 function UI.new(board)
@@ -112,8 +146,8 @@ function UI.new(board)
 
     -- Cursor & pulse
     self.cursorEdge = 1
-    self.pulseCounter = 0
-    self.pulseMax = 20
+    --self.pulseCounter = 0
+    --self.pulseMax = 20
 
     playdate.display.setRefreshRate(20)
     return self
@@ -125,8 +159,8 @@ end
 function UI:handleInput()
     -- Restart after game over
     if playdate.buttonJustPressed(playdate.kButtonA) and self.board:isGameOver() then
-        local Board = getmetatable(self.board).__index
-        self.board = Board.new(self.board.DOTS)
+        local BoardClass = getmetatable(self.board).__index
+        self.board = BoardClass.new(self.board.DOTS)
         self:buildCoordToEdge()
         self:buildBoxToCoord()
         self.cursorEdge = 1
@@ -228,24 +262,8 @@ function UI:draw()
         end
     end
 
-    -- Cursor
-    do
-        local coords = self.board.edgeToCoord[self.cursorEdge]
-        if coords then
-            local rr, cc, dir = table.unpack(coords)
-            local x1, y1 = dotXY(self, rr, cc)
-            local x2, y2
-            if dir == self.board.H then
-                x2, y2 = dotXY(self, rr, cc + 1)
-            else
-                x2, y2 = dotXY(self, rr + 1, cc)
-            end
-            gfx.setLineWidth(4); gfx.setColor(gfx.kColorWhite)
-            gfx.drawLine(x1, y1, x2, y2)
-            gfx.setLineWidth(2); gfx.setColor(gfx.kColorBlack)
-            gfx.drawLine(x1, y1, x2, y2)
-        end
-    end
+    -- Cursor highlight box
+    self:drawCursor()
 
     -- Side‑column scores
     do
