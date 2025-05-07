@@ -12,7 +12,7 @@ local SIDE_COL_W   <const> = 60   -- width of each side column (px)
 local V_PADDING    <const> = 20   -- top & bottom padding (px)
 local LINE_WIDTH   <const> = 6    -- line thickness (px)
 local DOT_SIZE     <const> = 4    -- radius of dots (px)
-local DIGIT_SCALE  <const> = 4    -- chunky‑digit scale factor
+local DIGIT_SCALE  <const> = 6    -- chunky‑digit scale factor
 
 -------------------------------------------------------------------------------
 -- CHUNKY 3×5 DIGIT BITMAP ---------------------------------------------------
@@ -108,7 +108,6 @@ function UI:drawCursor()
     local width  = math.abs(x2 - x1) + pad * 2
     local height = math.abs(y2 - y1) + pad * 2
 
-    -- tint by current player
     if self.board.currentPlayer == 1 then
         gfx.setColor(gfx.kColorBlack)
     else
@@ -116,9 +115,8 @@ function UI:drawCursor()
     end
     gfx.setLineWidth(3)
     gfx.drawRect(left, top, width, height)
-
-    -- restore draw color
     gfx.setColor(gfx.kColorBlack)
+    gfx.setDitherPattern(0)
 end
 
 -------------------------------------------------------------------------------
@@ -144,12 +142,8 @@ function UI.new(board)
     local availH = screenH - 2*V_PADDING
     self.top = V_PADDING + math.floor((availH - boardSide) / 2)
 
-    -- Cursor & pulse
+    -- Cursor
     self.cursorEdge = 1
-    --self.pulseCounter = 0
-    --self.pulseMax = 20
-
-    playdate.display.setRefreshRate(20)
     return self
 end
 
@@ -157,7 +151,6 @@ end
 -- Handle input
 -------------------------------------------------------------------------------
 function UI:handleInput()
-    -- Restart after game over
     if playdate.buttonJustPressed(playdate.kButtonA) and self.board:isGameOver() then
         local BoardClass = getmetatable(self.board).__index
         self.board = BoardClass.new(self.board.DOTS)
@@ -167,12 +160,10 @@ function UI:handleInput()
         return
     end
 
-    -- Current edge coords
     local coords = self.board.edgeToCoord[self.cursorEdge]
     if not coords then return end
     local r, c, dir = table.unpack(coords)
 
-    -- D‑pad wrap
     local maxR = (dir == self.board.H) and self.board.DOTS or self.board.DOTS-1
     local maxC = (dir == self.board.H) and self.board.DOTS-1 or self.board.DOTS
     local newR, newC = r, c
@@ -187,12 +178,9 @@ function UI:handleInput()
         if e then self.cursorEdge = e end
     end
 
-    -- Claim edge
     if playdate.buttonJustPressed(playdate.kButtonA) then
         self.board:playEdge(self.cursorEdge)
     end
-
-    -- Rotate orientation with B
     if playdate.buttonJustPressed(playdate.kButtonB) then
         local altDir = (dir==self.board.H) and self.board.V or self.board.H
         local e2 = self.coordToEdge[r] and self.coordToEdge[r][c] and
@@ -218,51 +206,45 @@ function UI:draw()
     -- Tally scores -----------------------------------------
     local p1Score, p2Score = 0, 0
     for _, owner in pairs(self.board.boxOwner) do
-        if owner == 1 then
-            p1Score = p1Score + 1
-        elseif owner == 2 then
-            p2Score = p2Score + 1
-        end
+        if owner == 1 then p1Score = p1Score + 1
+        elseif owner == 2 then p2Score = p2Score + 1 end
     end
 
     -- Dots
-    for rr=1,self.board.DOTS do 
+    for rr=1,self.board.DOTS do
         for cc=1,self.board.DOTS do
             local x,y = dotXY(self, rr, cc)
             gfx.fillCircleAtPoint(x, y, DOT_SIZE)
-        end  
+        end
     end
 
-    -- Edges -------------------------------------------------
+    -- Edges
     for e = 1, #self.board.edgeToCoord do
         if self.board:edgeIsFilled(e) then
             local rr, cc, d = table.unpack(self.board.edgeToCoord[e])
             local x1, y1 = dotXY(self, rr, cc)
             local x2, y2
-            if d == self.board.H then
-                x2, y2 = dotXY(self, rr, cc + 1)
-            else
-                x2, y2 = dotXY(self, rr + 1, cc)
-            end
+            if d == self.board.H then x2,y2 = dotXY(self, rr, cc+1)
+            else x2,y2 = dotXY(self, rr+1, cc) end
             local owner = self.board.edgeOwner[e] or 1
-            gfx.setDitherPattern(owner == 2 and 0.5 or 0)
-            drawThickLine(x1, y1, x2, y2)
+            gfx.setDitherPattern(owner==2 and 0.5 or 0)
+            drawThickLine(x1,y1,x2,y2)
             gfx.setDitherPattern(0)
         end
     end
-    
+
     -- Claimed boxes
-    for id,bc in ipairs(self.boxToCoord) do
+    for id, bc in ipairs(self.boxToCoord) do
         local o = self.board.boxOwner[id]
         if o then
-            local br,bc2 = table.unpack(bc)
+            local br, bc2 = table.unpack(bc)
             local cx = self.left + (bc2-1)*self.spacing + self.spacing/2
             local cy = self.top  + (br-1)*self.spacing + self.spacing/2
             gfx.drawText(tostring(o), cx-4, cy-6)
         end
     end
 
-    -- Cursor highlight box
+    -- Cursor
     self:drawCursor()
 
     -- Side‑column scores
@@ -271,32 +253,29 @@ function UI:draw()
         local dw, dh = 3*DIGIT_SCALE, 5*DIGIT_SCALE
         local sy    = sh/2 - dh/2
 
-        local function drawScore(val, px, active)
+        local function drawScore(val, px, active, useDither)
+            -- set digit dithering for P2
+            gfx.setDitherPattern(useDither and 0.5 or 0)
             local s = tostring(val)
             local totalW = #s * (dw + DIGIT_SCALE) - DIGIT_SCALE
             local sx     = px + (SIDE_COL_W - totalW) / 2
 
-            -- draw digits
             for i = 1, #s do
-                drawChunkyDigit(
-                tonumber(s:sub(i,i)),
-                sx + (i-1)*(dw + DIGIT_SCALE),
-                sy,
-                DIGIT_SCALE
-                )
+                drawChunkyDigit(tonumber(s:sub(i,i)), sx + (i-1)*(dw + DIGIT_SCALE), sy, DIGIT_SCALE)
             end
+            gfx.setDitherPattern(0)
 
-            -- static underline for active player
             if active then
-                local ux, uy = px + 5,    sy + dh + 2
+                local ux, uy = px + 5, sy + dh + 2
                 local uw, uh = SIDE_COL_W - 10, 2
                 gfx.setColor(gfx.kColorBlack)
                 gfx.fillRect(ux, uy, uw, uh)
+                gfx.setColor(gfx.kColorBlack)
             end
         end
 
-        drawScore(p1Score,               0,               self.board.currentPlayer == 1)
-        drawScore(p2Score, sw - SIDE_COL_W, self.board.currentPlayer == 2)
+        drawScore(p1Score,               0,               self.board.currentPlayer==1, false)
+        drawScore(p2Score, sw - SIDE_COL_W, self.board.currentPlayer==2, true)
     end
 
     -- Game‑over
@@ -316,7 +295,6 @@ end
 -------------------------------------------------------------------------------
 function UI:update()
     self:handleInput()
-    self.pulseCounter = (self.pulseCounter + 1) % self.pulseMax
     self:draw()
 end
 
