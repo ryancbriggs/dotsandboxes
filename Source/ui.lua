@@ -144,6 +144,7 @@ function UI.new(board)
 
     -- Cursor
     self.cursorEdge = 1
+    playdate.display.setRefreshRate(20)
     return self
 end
 
@@ -265,13 +266,7 @@ function UI:draw()
             end
             gfx.setDitherPattern(0)
 
-            if active then
-                local ux, uy = px + 5, sy + dh + 2
-                local uw, uh = SIDE_COL_W - 10, 2
-                gfx.setColor(gfx.kColorBlack)
-                gfx.fillRect(ux, uy, uw, uh)
-                gfx.setColor(gfx.kColorBlack)
-            end
+
         end
 
         drawScore(p1Score,               0,               self.board.currentPlayer==1, false)
