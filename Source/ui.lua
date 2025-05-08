@@ -234,14 +234,26 @@ function UI:draw()
         end
     end
 
-    -- Claimed boxes
+    -- Claimed boxes: draw a smaller centered square
     for id, bc in ipairs(self.boxToCoord) do
-        local o = self.board.boxOwner[id]
-        if o then
+        local owner = self.board.boxOwner[id]
+        if owner then
             local br, bc2 = table.unpack(bc)
-            local cx = self.left + (bc2-1)*self.spacing + self.spacing/2
-            local cy = self.top  + (br-1)*self.spacing + self.spacing/2
-            gfx.drawText(tostring(o), cx-4, cy-6)
+            -- top‐left of the full box cell
+            local boxX = self.left + (bc2 - 1) * self.spacing
+            local boxY = self.top  + (br  - 1) * self.spacing
+
+            -- inner square is half the box’s width
+            local innerSize = math.floor(self.spacing * 0.5)
+            -- inset to center it
+            local inset = math.floor((self.spacing - innerSize) / 2)
+            local x = boxX + inset
+            local y = boxY + inset
+
+            -- tint by owner: solid black for P1, 50% dither for P2
+            gfx.setDitherPattern(owner == 2 and 0.5 or 0)
+            gfx.fillRect(x, y, innerSize, innerSize)
+            gfx.setDitherPattern(0)  -- reset for the next UI elements
         end
     end
 
