@@ -32,6 +32,12 @@ settings.numDots = math.min(8, math.max(3, settings.numDots or DEFAULT_SETTINGS.
 
 -- validate difficulty string -------------------------------------------------
 local difficulties = { "easy", "medium", "hard", "expert" }
+local function difficultyIndex()
+    for i, v in ipairs(difficulties) do
+        if settings.difficulty == v then return i end
+    end
+    return 1
+end
 local function isValidDiff(d)
     for _,v in ipairs(difficulties) do
         if d == v then return true end
