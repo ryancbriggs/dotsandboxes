@@ -12,6 +12,7 @@ local SIDE_COL_W   <const> = 60   -- width of each side column (px)
 local V_PADDING    <const> = 20   -- top & bottom padding (px)
 local LINE_WIDTH   <const> = 6    -- line thickness (px)
 local DOT_SIZE     <const> = 4    -- radius of dots (px)
+UI.DOT_SIZE = DOT_SIZE            -- for external use
 local DIGIT_SCALE  <const> = 6    -- chunky‑digit scale factor
 
 -------------------------------------------------------------------------------
