@@ -6,6 +6,7 @@ local gfx <const> = playdate.graphics
 
 local UI = {}
 UI.__index = UI
+local Characters = import "characters"
 
 -- Visual constants ----------------------------------------------------------
 local SIDE_COL_W   <const> = 60   -- width of each side column (px)
@@ -15,32 +16,8 @@ local DOT_SIZE     <const> = 4    -- radius of dots (px)
 UI.DOT_SIZE = DOT_SIZE            -- for external use
 local DIGIT_SCALE  <const> = 6    -- chunky‑digit scale factor
 
--------------------------------------------------------------------------------
--- CHUNKY 3×5 DIGIT BITMAP ---------------------------------------------------
-local DIGIT_BITS <const> = {
-    [0] = 31599, -- 0b111101101101111
-    11415,       -- 1
-    29671,       -- 2
-    29647,       -- 3
-    23497,       -- 4
-    31183,       -- 5
-    31215,       -- 6
-    29257,       -- 7
-    31727,       -- 8
-    31695        -- 9
-}
-local function drawChunkyDigit(n, x, y, scale)
-    local bits = DIGIT_BITS[n]
-    if not bits then return end
-    for row = 0, 4 do
-        for col = 0, 2 do
-            local bitPos = 14 - (row*3 + col)
-            if ((bits >> bitPos) & 1) == 1 then
-                gfx.fillRect(x + col*scale, y + row*scale, scale, scale)
-            end
-        end
-    end
-end
+-- Chunky digits --------------------------------------------------------------
+local drawChunkyChar = Characters.drawChunkyChar
 
 -------------------------------------------------------------------------------
 -- Build reverse look‑ups for edges and boxes
@@ -275,7 +252,7 @@ function UI:draw()
             local sx     = px + (SIDE_COL_W - totalW) / 2
 
             for i = 1, #s do
-                drawChunkyDigit(tonumber(s:sub(i,i)), sx + (i-1)*(dw + DIGIT_SCALE), sy, DIGIT_SCALE)
+                drawChunkyChar(s:sub(i,i), sx + (i-1)*(dw + DIGIT_SCALE), sy, DIGIT_SCALE)
             end
             gfx.setDitherPattern(0)
 
