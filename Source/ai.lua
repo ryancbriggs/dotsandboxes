@@ -208,6 +208,9 @@ local function negamax(vals, cache)
         if s > best then best = s end
         if best >= 0 then break end
     end
+
+    coroutine.yield() -- Yield periodically to avoid freezing
+
     cache[key] = best
     return best
 end
@@ -238,6 +241,9 @@ local function negamaxSolver(board)
             table.insert(bestIdxs, i)
         end
     end
+
+    coroutine.yield() -- Yield periodically to avoid freezing
+
     local idx = bestIdxs[math.random(#bestIdxs)]
     return edges[idx]
 end
