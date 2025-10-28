@@ -4,5 +4,5 @@ description = Minimal dots‑and‑boxes implementation in Lua
 bundleID = com.ryan.dotsandboxes
 version = 1.0
 buildNumber = 1
-pdxversion=20701
-buildtime=800072657
+pdxversion=30000
+buildtime=814926046

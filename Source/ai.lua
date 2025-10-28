@@ -92,71 +92,136 @@ local function collectHotComponents(board)
     return comps
 end
 
--- Flood‑fill free‑edge graph to find disjoint regions (pockets)
-local function freeEdgeRegions(board)
-    local all = freeEdges(board)
-    local visited, regions = {}, {}
-    local function adjacent(e1, e2)
-        for _, b1 in ipairs(board.edgeBoxes[e1] or {}) do
-            for _, b2 in ipairs(board.edgeBoxes[e2] or {}) do
-                if b1 == b2 then return true end
-            end
-        end
-        return false
-    end
-    for _, e in ipairs(all) do
-        if not visited[e] then
-            visited[e] = true
-            local stack, comp = { e }, {}
-            while #stack > 0 do
-                local x = table.remove(stack)
-                table.insert(comp, x)
-                for _, y in ipairs(all) do
-                    if not visited[y] and adjacent(x, y) then
-                        visited[y] = true
-                        table.insert(stack, y)
-                    end
+-- Detect prospective chains/loops where every box still has exactly 2 sides
+-- filled. This is the configuration that appears the moment safe moves are
+-- exhausted, before any chain has been opened.
+local function collectColdComponents(board)
+    local comps, seen = {}, {}
+    local BE, EB = board.boxEdges, board.edgeBoxes
+
+    local function dfs(b, comp)
+        seen[b] = true
+        comp.len = comp.len + 1
+        for _, e in ipairs(BE[b]) do
+            if not board.edgesFilled[e] then
+                comp.firstEdge = comp.firstEdge or e
+                local adj = EB[e] or {}
+                local neighbor
+                if #adj == 2 then
+                    neighbor = (adj[1] == b) and adj[2] or adj[1]
+                end
+
+                if neighbor and countFilled(board, BE[neighbor]) == 2 then
+                    if not seen[neighbor] then dfs(neighbor, comp) end
+                else
+                    comp.entryEdges = comp.entryEdges or {}
+                    table.insert(comp.entryEdges, e)
                 end
             end
-            table.insert(regions, comp)
         end
     end
-    return regions
+
+    for i = 1, #board.boxEdges do
+        if not seen[i] and countFilled(board, board.boxEdges[i]) == 2 then
+            local c = { len = 0 }
+            dfs(i, c)
+            c.isLoop = not c.entryEdges or #c.entryEdges == 0
+            if not c.isLoop then
+                c.edge = c.entryEdges[1]
+            else
+                c.edge = c.firstEdge
+            end
+            table.insert(comps, c)
+        end
+    end
+    return comps
 end
 
--- Filter a list of edges down to those in one region
-local function filterEdges(region, edges)
-    local set, out = {}, {}
-    for _, e in ipairs(region) do set[e] = true end
-    for _, e in ipairs(edges) do
-        if set[e] then table.insert(out, e) end
-    end
+-- Component bookkeeping helpers for Berlekamp endgame solver
+local function copyCounts(counts)
+    local out = {}
+    for len, count in pairs(counts) do out[len] = count end
     return out
 end
 
--- Pocket‑specific Nim‑sum
-local function pocketNimSum(board, region)
-    local xor, myComps = 0, {}
-    local inSet = {}
-    for _, e in ipairs(region) do inSet[e] = true end
-    for _, c in ipairs(collectHotComponents(board)) do
-        if inSet[c.edge] then
-            table.insert(myComps, c)
-            local heap = c.isLoop and 1 or (c.len - 1)
-            xor = xor ~ heap
-        end
+local function componentState(comps)
+    local state = { chains = {}, loops = {} }
+    for _, comp in ipairs(comps) do
+        local bucket = comp.isLoop and state.loops or state.chains
+        bucket[comp.len] = (bucket[comp.len] or 0) + 1
     end
-    return xor, myComps
+    return state
 end
 
--- Pick best pocket: prefer any xor≠0, else smallest
-local function selectPocket(board)
-    local regs = freeEdgeRegions(board)
-    for _, r in ipairs(regs) do
-        if pocketNimSum(board, r) ~= 0 then return r end
+local function stateKey(state)
+    local chainParts, loopParts = {}, {}
+    for len, count in pairs(state.chains) do
+        chainParts[#chainParts + 1] = len .. ":" .. count
     end
-    table.sort(regs, function(a,b) return #a < #b end)
-    return regs[1]
+    for len, count in pairs(state.loops) do
+        loopParts[#loopParts + 1] = len .. ":" .. count
+    end
+    table.sort(chainParts)
+    table.sort(loopParts)
+    return "C" .. table.concat(chainParts, ",") .. "|L" .. table.concat(loopParts, ",")
+end
+
+local function removeComponent(state, isLoop, len)
+    local nextState = {
+        chains = copyCounts(state.chains),
+        loops  = copyCounts(state.loops),
+    }
+    local bucket = isLoop and nextState.loops or nextState.chains
+    local count = (bucket[len] or 0) - 1
+    if count > 0 then
+        bucket[len] = count
+    else
+        bucket[len] = nil
+    end
+    return nextState
+end
+
+local function solveComponents(state, memo)
+    local key = stateKey(state)
+    if memo[key] then return memo[key] end
+
+    local hasChain, hasLoop = next(state.chains), next(state.loops)
+    if not hasChain and not hasLoop then
+        memo[key] = 0
+        return 0
+    end
+
+    local best = -math.huge
+
+    for len, count in pairs(state.chains) do
+        if count > 0 then
+            local nextState = removeComponent(state, false, len)
+            local nextVal = solveComponents(nextState, memo)
+            local worst = -len - nextVal
+            if len >= 4 then
+                local keep = -(len - 4) + nextVal
+                if keep < worst then worst = keep end
+            end
+            if worst > best then best = worst end
+        end
+    end
+
+    for len, count in pairs(state.loops) do
+        if count > 0 then
+            local nextState = removeComponent(state, true, len)
+            local nextVal = solveComponents(nextState, memo)
+            local worst = -len - nextVal
+            if len >= 6 then
+                local keep = -(len - 8) + nextVal
+                if keep < worst then worst = keep end
+            end
+            if worst > best then best = worst end
+        end
+    end
+
+    if best == -math.huge then best = 0 end
+    memo[key] = best
+    return best
 end
 
 -- ────────────────────────────────────────────────────────────────────────────
@@ -223,8 +288,11 @@ local function negamaxSolver(board)
     if #s > 0 then return s[math.random(#s)] end
     local comps = collectHotComponents(board)
     if #comps == 0 then
-        local f = freeEdges(board)
-        return f[math.random(#f)]
+        comps = collectColdComponents(board)
+        if #comps == 0 then
+            local f = freeEdges(board)
+            return f[math.random(#f)]
+        end
     end
     local vals, edges = {}, {}
     for i, comp in ipairs(comps) do
@@ -248,28 +316,48 @@ local function negamaxSolver(board)
     return edges[idx]
 end
 
--- Berlekamp Nim‑sum solver with random tie-breaking
+-- Perfect Berlekamp endgame solver with dynamic programming tie-breaking
 local function berlekampSolver(board)
     local comps = collectHotComponents(board)
-    local xor, cand = 0, {}
-    for _, c in ipairs(comps) do
-        local h = c.isLoop and 1 or (c.len - 1)
-        xor = xor ~ h
+    if #comps == 0 then
+        comps = collectColdComponents(board)
+        if #comps == 0 then
+            local f = freeEdges(board)
+            return f[math.random(#f)]
+        end
     end
-    if xor ~= 0 then
-        for _, c in ipairs(comps) do
-            if not c.isLoop then
-                local h = c.len - 1
-                if (h ~ xor) < h then table.insert(cand, c.edge) end
+
+    local state = componentState(comps)
+    local memo = {}
+    local bestScore, best = -math.huge, {}
+
+    for _, comp in ipairs(comps) do
+        local nextState = removeComponent(state, comp.isLoop, comp.len)
+        local nextVal = solveComponents(nextState, memo)
+        local worst = -comp.len - nextVal
+        if comp.isLoop then
+            if comp.len >= 6 then
+                local keep = -(comp.len - 8) + nextVal
+                if keep < worst then worst = keep end
+            end
+        else
+            if comp.len >= 4 then
+                local keep = -(comp.len - 4) + nextVal
+                if keep < worst then worst = keep end
             end
         end
-    else
-        for _, c in ipairs(comps) do
-            if not c.isLoop and c.len > 2 then table.insert(cand, c.edge) end
+
+        if worst > bestScore then
+            bestScore, best = worst, { comp.edge }
+        elseif worst == bestScore then
+            table.insert(best, comp.edge)
         end
     end
-    if #cand > 0 then return cand[math.random(#cand)] end
-    return (comps[1] and comps[1].edge) or freeEdges(board)[1]
+
+    if #best == 0 then
+        return negamaxSolver(board)
+    end
+    return best[math.random(#best)]
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -340,7 +428,7 @@ Strategies.hard = function(board)
     return negamaxSolver(board)
 end
 
--- EXPERT: same as hard early, then pocket‑aware Berlekamp Nim‑sum
+-- EXPERT: same as hard early, then perfect Berlekamp endgame play
 Strategies.expert = function(board)
     local c = closers(board)
     if #c>0 then return c[1] end
@@ -349,14 +437,7 @@ Strategies.expert = function(board)
     local s = safes(board)
     if #s>0 then return bestSafeEdge(board, s) end
 
-    local pocket = selectPocket(board)
-    local xor, comps = pocketNimSum(board, pocket)
-    if #comps>0 then return berlekampSolver(board) end
-
-    -- fallback depth‑2 inside pocket
-    local ps = filterEdges(pocket, safes(board))
-    if #ps>0 then return bestSafeEdge(board, ps) end
-    return pocket[math.random(#pocket)]
+    return berlekampSolver(board)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
