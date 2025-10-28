@@ -100,9 +100,11 @@ end
 -------------------------------------------------------------------------------
 -- Constructor
 -------------------------------------------------------------------------------
-function UI.new(board)
+function UI.new(board, opts)
     local self = setmetatable({}, UI)
     self.board = board
+    opts = opts or {}
+    self.onRestart = opts.onRestart
 
     -- Build look‑ups
     self:buildCoordToEdge()
@@ -131,11 +133,15 @@ end
 -------------------------------------------------------------------------------
 function UI:handleInput()
     if playdate.buttonJustPressed(playdate.kButtonA) and self.board:isGameOver() then
-        local BoardClass = getmetatable(self.board).__index
-        self.board = BoardClass.new(self.board.DOTS)
-        self:buildCoordToEdge()
-        self:buildBoxToCoord()
-        self.cursorEdge = 1
+        if self.onRestart then
+            self.onRestart()
+        else
+            local BoardClass = getmetatable(self.board).__index
+            self.board = BoardClass.new(self.board.DOTS)
+            self:buildCoordToEdge()
+            self:buildBoxToCoord()
+            self.cursorEdge = 1
+        end
         return
     end
 
@@ -158,7 +164,9 @@ function UI:handleInput()
     end
 
     if playdate.buttonJustPressed(playdate.kButtonA) then
-        self.board:playEdge(self.cursorEdge)
+        if self.mode ~= "pvc" or self.board.currentPlayer == 1 then
+            self.board:playEdge(self.cursorEdge)
+        end
     end
     if playdate.buttonJustPressed(playdate.kButtonB) then
         local altDir = (dir==self.board.H) and self.board.V or self.board.H

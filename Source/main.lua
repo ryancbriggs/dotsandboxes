@@ -98,17 +98,25 @@ local ui             = nil
 -- AI scheduling helper -----------------------------------------------------
 -- ---------------------------------------------------------------------------
 local function scheduleAIMove()
+    local board = ui and ui.board
+    if not board then return end
     playdate.timer.performAfterDelay(1, function()
-        local mv = Ai.chooseMove(ui.board)
-        if mv then
-            ui.board:playEdge(mv)
-            -- if AI just completed a box and still has the turn, schedule again
-            if ui.mode == "pvc"
-            and ui.board.currentPlayer == 2
-            and not ui.board:isGameOver()
-            then
-                scheduleAIMove()
-            end
+        if not ui or ui.board ~= board or ui.mode ~= "pvc" then return end
+        if board:isGameOver() then return end
+        if board.currentPlayer ~= 2 then return end
+
+        local move = Ai.chooseMove(board)
+        if not move then return end
+
+        board:playEdge(move)
+
+        -- if AI just completed a box and still has the turn, schedule again
+        if ui and ui.board == board
+        and ui.mode == "pvc"
+        and board.currentPlayer == 2
+        and not board:isGameOver()
+        then
+            scheduleAIMove()
         end
     end)
 end
@@ -128,7 +136,11 @@ playdate.getSystemMenu():addMenuItem("Main Menu", returnToMainMenu)
 -- initialize a new game ----------------------------------------------------
 local function initGame(mode)
     local board = Board.new(settings.numDots)
-    ui       = UI.new(board)
+    ui       = UI.new(board, {
+        onRestart = function()
+            initGame(mode)
+        end
+    })
     ui.mode  = mode
     appState = mode
     Ai.setDifficulty(settings.difficulty)

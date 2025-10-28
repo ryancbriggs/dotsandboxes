@@ -1,22 +1,27 @@
 -- ai.lua
--- AI module for Dots & Boxes with four difficulty levels:
---   • easy   – 10% random blunders; otherwise greedy & random safe.
---   • medium – depth‑1 safe‑edge heuristic, randomized among top‑K.
---   • hard   – depth‑2 safe‑edge lookahead until safes deplete, then full chain/loop solver.
---   • expert – plays like hard early; upon first chain or split, switches to pocket‑aware Berlekamp Nim‑sum.
+-- Modular AI module with shared edge analysis, heuristics, and solvers.
+-- Difficulty tiers (easy → expert) build on composable primitives:
+--   • easy   – 10% blunders, otherwise greedy closers or random safes.
+--   • medium – greedy closers, heuristic safe-edge ranking, chain solver fallback.
+--   • hard   – medium’s plan plus 2-ply safe-edge lookahead.
+--   • expert – hard’s opener with Berlekamp-style endgame resolution.
 
 local Ai = {}
 Ai.difficulty = "medium"
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 1. BUILDING BLOCKS: classifiers & solvers
+-- 1. EDGE ANALYSIS PRIMITIVES
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Random blunder helper: returns true with probability p
-local function randomChance(p) return math.random() < p end
+local EdgeUtils = {}
 
--- Count how many edges in 'list' are already filled on the board
-local function countFilled(board, list)
+-- Random blunder helper: returns true with probability p
+function EdgeUtils.randomChance(p)
+    return math.random() < p
+end
+
+-- Count how many edges in `list` are already filled on the board
+function EdgeUtils.countFilled(board, list)
     local n = 0
     for _, e in ipairs(list) do
         if board.edgesFilled[e] then n = n + 1 end
@@ -24,56 +29,62 @@ local function countFilled(board, list)
     return n
 end
 
--- Shorthand for listing all free edges
-local function freeEdges(board) return board:listFreeEdges() end
+-- Classify every free edge once so strategies can reuse the same snapshot.
+function EdgeUtils.classify(board)
+    local snapshot = {
+        free    = {},
+        closers = {},
+        safes   = {}
+    }
 
--- ────────────────────────────────────────────────────────────────────────────
--- Edge classifiers
--- ────────────────────────────────────────────────────────────────────────────
+    for _, edge in ipairs(board:listFreeEdges()) do
+        table.insert(snapshot.free, edge)
 
-local function closers(board)
-    local out = {}
-    for _, e in ipairs(freeEdges(board)) do
-        for _, b in ipairs(board.edgeBoxes[e] or {}) do
-            if countFilled(board, board.boxEdges[b]) == 3 then
-                table.insert(out, e)
+        local closesBox, isSafe = false, true
+        for _, boxId in ipairs(board.edgeBoxes[edge] or {}) do
+            local filled = EdgeUtils.countFilled(board, board.boxEdges[boxId])
+            if filled == 3 then closesBox = true end
+            if filled == 2 then isSafe = false end
+        end
+
+        if closesBox then snapshot.closers[#snapshot.closers + 1] = edge end
+        if isSafe   then snapshot.safes[#snapshot.safes + 1]       = edge end
+    end
+
+    return snapshot
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 2. COMPONENT DETECTION (chains / loops)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local Components = {}
+
+-- Detect all 3-sided boxes (hot components).
+function Components.collectHot(board)
+    local comps, seen = {}, {}
+    local BE, EB = board.boxEdges, board.edgeBoxes
+
+    local function dfs(boxId, comp)
+        seen[boxId] = true
+        comp.len = comp.len + 1
+
+        local empty
+        for _, edge in ipairs(BE[boxId]) do
+            if not board.edgesFilled[edge] then
+                empty = edge
                 break
             end
         end
-    end
-    return out
-end
 
-local function safes(board)
-    local out = {}
-    for _, e in ipairs(freeEdges(board)) do
-        local ok = true
-        for _, b in ipairs(board.edgeBoxes[e] or {}) do
-            if countFilled(board, board.boxEdges[b]) == 2 then
-                ok = false; break
-            end
-        end
-        if ok then table.insert(out, e) end
-    end
-    return out
-end
-
--- Detect all 3‑sided boxes (chains/loops)
-local function collectHotComponents(board)
-    local comps, seen = {}, {}
-    local BE, EB = board.boxEdges, board.edgeBoxes
-    local function dfs(b, comp)
-        seen[b] = true; comp.len = comp.len + 1
-        local empty
-        for _, e in ipairs(BE[b]) do
-            if not board.edgesFilled[e] then empty = e; break end
-        end
         if not comp.edge then comp.edge = empty end
         local adj = EB[empty] or {}
         if #adj == 2 then
-            local nb = (adj[1]==b) and adj[2] or adj[1]
-            if countFilled(board, BE[nb]) == 3 and not seen[nb] then
-                dfs(nb, comp)
+            local nb = (adj[1] == boxId) and adj[2] or adj[1]
+            if EdgeUtils.countFilled(board, BE[nb]) == 3 then
+                if not seen[nb] then
+                    dfs(nb, comp)
+                end
             else
                 comp.ends = (comp.ends or 0) + 1
             end
@@ -81,63 +92,68 @@ local function collectHotComponents(board)
             comp.ends = (comp.ends or 0) + 1
         end
     end
-    for i = 1, #board.boxEdges do
-        if not seen[i] and countFilled(board, board.boxEdges[i]) == 3 then
-            local c = { len = 0, edge = nil, ends = 0 }
-            dfs(i, c)
-            c.isLoop = (c.ends == 0)
-            table.insert(comps, c)
+
+    for boxId = 1, #board.boxEdges do
+        if not seen[boxId]
+        and EdgeUtils.countFilled(board, board.boxEdges[boxId]) == 3
+        then
+            local comp = { len = 0, edge = nil, ends = 0 }
+            dfs(boxId, comp)
+            comp.isLoop = (comp.ends == 0)
+            table.insert(comps, comp)
         end
     end
+
     return comps
 end
 
--- Detect prospective chains/loops where every box still has exactly 2 sides
--- filled. This is the configuration that appears the moment safe moves are
--- exhausted, before any chain has been opened.
-local function collectColdComponents(board)
+-- Detect prospective chains/loops with exactly two sides filled per box.
+function Components.collectCold(board)
     local comps, seen = {}, {}
     local BE, EB = board.boxEdges, board.edgeBoxes
 
-    local function dfs(b, comp)
-        seen[b] = true
+    local function dfs(boxId, comp)
+        seen[boxId] = true
         comp.len = comp.len + 1
-        for _, e in ipairs(BE[b]) do
-            if not board.edgesFilled[e] then
-                comp.firstEdge = comp.firstEdge or e
-                local adj = EB[e] or {}
+        for _, edge in ipairs(BE[boxId]) do
+            if not board.edgesFilled[edge] then
+                comp.firstEdge = comp.firstEdge or edge
+                local adj = EB[edge] or {}
                 local neighbor
                 if #adj == 2 then
-                    neighbor = (adj[1] == b) and adj[2] or adj[1]
+                    neighbor = (adj[1] == boxId) and adj[2] or adj[1]
                 end
 
-                if neighbor and countFilled(board, BE[neighbor]) == 2 then
+                if neighbor and EdgeUtils.countFilled(board, BE[neighbor]) == 2 then
                     if not seen[neighbor] then dfs(neighbor, comp) end
                 else
                     comp.entryEdges = comp.entryEdges or {}
-                    table.insert(comp.entryEdges, e)
+                    table.insert(comp.entryEdges, edge)
                 end
             end
         end
     end
 
-    for i = 1, #board.boxEdges do
-        if not seen[i] and countFilled(board, board.boxEdges[i]) == 2 then
-            local c = { len = 0 }
-            dfs(i, c)
-            c.isLoop = not c.entryEdges or #c.entryEdges == 0
-            if not c.isLoop then
-                c.edge = c.entryEdges[1]
+    for boxId = 1, #board.boxEdges do
+        if not seen[boxId]
+        and EdgeUtils.countFilled(board, board.boxEdges[boxId]) == 2
+        then
+            local comp = { len = 0 }
+            dfs(boxId, comp)
+            comp.isLoop = not comp.entryEdges or #comp.entryEdges == 0
+            if not comp.isLoop then
+                comp.edge = comp.entryEdges[1]
             else
-                c.edge = c.firstEdge
+                comp.edge = comp.firstEdge
             end
-            table.insert(comps, c)
+            table.insert(comps, comp)
         end
     end
+
     return comps
 end
 
--- Component bookkeeping helpers for Berlekamp endgame solver
+-- Helpers for Berlekamp solver bookkeeping.
 local function copyCounts(counts)
     local out = {}
     for len, count in pairs(counts) do out[len] = count end
@@ -224,112 +240,132 @@ local function solveComponents(state, memo)
     return best
 end
 
--- ────────────────────────────────────────────────────────────────────────────
--- 1b) Heuristics
--- ────────────────────────────────────────────────────────────────────────────
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 3. HEURISTICS
+-- ═══════════════════════════════════════════════════════════════════════════
 
--- Local score: border bonus + how “filled” its boxes already are
-local function scoreSafeEdge(board, e)
-    local adj, bonus, maxF = board.edgeBoxes[e] or {}, 0, 0
+local Heuristics = {}
+
+function Heuristics.scoreSafeEdge(board, edge)
+    local adj, bonus, maxFilled = board.edgeBoxes[edge] or {}, 0, 0
     if #adj == 1 then bonus = 3 end
-    for _, b in ipairs(adj) do
-        local f = countFilled(board, board.boxEdges[b])
-        if f > maxF then maxF = f end
+    for _, boxId in ipairs(adj) do
+        local filled = EdgeUtils.countFilled(board, board.boxEdges[boxId])
+        if filled > maxFilled then maxFilled = filled end
     end
-    return bonus + maxF
+    return bonus + maxFilled
 end
 
--- 2‑ply safe‑edge lookahead: simulate each safe, count future hot‑components
-local function bestSafeEdge(board, list)
-    local bestE, bestS = list[1], -math.huge
-    for _, e in ipairs(list) do
-        board.edgesFilled[e] = true
-        local hotCount = #collectHotComponents(board)
-        board.edgesFilled[e] = nil
-        local s = -hotCount + scoreSafeEdge(board, e)
-        if s > bestS then bestS, bestE = s, e end
+function Heuristics.bestSafeEdge(board, safeEdges)
+    local bestEdge, bestScore = safeEdges[1], -math.huge
+    for _, edge in ipairs(safeEdges) do
+        board.edgesFilled[edge] = true
+        local hotCount = #Components.collectHot(board)
+        board.edgesFilled[edge] = nil
+        local score = -hotCount + Heuristics.scoreSafeEdge(board, edge)
+        if score > bestScore then
+            bestScore, bestEdge = score, edge
+        end
     end
-    return bestE
+    return bestEdge
 end
 
--- ────────────────────────────────────────────────────────────────────────────
--- 1c) Solvers
--- ────────────────────────────────────────────────────────────────────────────
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 4. ENDGAME SOLVERS
+-- ═══════════════════════════════════════════════════════════════════════════
 
--- Negamax on chain‑lengths for perfect endgame
-local function compValue(c) return c.isLoop and -1 or (4 - c.len) end
+local Endgame = {}
+
+local function compValue(comp)
+    return comp.isLoop and -1 or (4 - comp.len)
+end
+
 local function multisetKey(vals)
-    table.sort(vals, function(a,b) return a>b end)
+    table.sort(vals, function(a, b) return a > b end)
     return table.concat(vals, ",")
 end
+
+local function safeYield()
+    if coroutine.isyieldable then
+        if coroutine.isyieldable() then coroutine.yield() end
+    else
+        local co, isMain = coroutine.running()
+        if co and not isMain then coroutine.yield() end
+    end
+end
+
 local function negamax(vals, cache)
+    if #vals == 0 then return 0 end
     local key = multisetKey(vals)
     if cache[key] then return cache[key] end
     local best = -64
-    for i, v in ipairs(vals) do
-        local last = table.remove(vals)
-        local s = -negamax(vals, cache) - v
-        table.insert(vals, last)
-        if s > best then best = s end
+    for i = 1, #vals do
+        local v = table.remove(vals, i)
+        local score = -negamax(vals, cache) - v
+        table.insert(vals, i, v)
+        if score > best then best = score end
         if best >= 0 then break end
     end
 
-    coroutine.yield() -- Yield periodically to avoid freezing
+    safeYield() -- Yield periodically to avoid freezing
 
     cache[key] = best
     return best
 end
 
--- Full chain/loop solver with random tie‑breaking
-local function negamaxSolver(board)
-    local c = closers(board)
-    if #c > 0 then return c[math.random(#c)] end
-    local s = safes(board)
-    if #s > 0 then return s[math.random(#s)] end
-    local comps = collectHotComponents(board)
+function Endgame.negamaxSolver(board, snapshot)
+    snapshot = snapshot or EdgeUtils.classify(board)
+    if #snapshot.closers > 0 then
+        return snapshot.closers[math.random(#snapshot.closers)]
+    end
+    if #snapshot.safes > 0 then
+        return snapshot.safes[math.random(#snapshot.safes)]
+    end
+
+    local comps = Components.collectHot(board)
     if #comps == 0 then
-        comps = collectColdComponents(board)
+        comps = Components.collectCold(board)
         if #comps == 0 then
-            local f = freeEdges(board)
-            return f[math.random(#f)]
+            return snapshot.free[math.random(#snapshot.free)]
         end
     end
+
     local vals, edges = {}, {}
-    for i, comp in ipairs(comps) do
-        vals[i], edges[i] = compValue(comp), comp.edge
+    for idx, comp in ipairs(comps) do
+        vals[idx], edges[idx] = compValue(comp), comp.edge
     end
-    local cache, bestScore, bestIdxs = {}, -math.huge, {}
+
+    local cache, bestScore, bestIndices = {}, -math.huge, {}
     for i = 1, #vals do
-        local v = table.remove(vals, i)
-        local sc = -negamax(vals, cache) - v
-        table.insert(vals, i, v)
-        if sc > bestScore then
-            bestScore, bestIdxs = sc, { i }
-        elseif sc == bestScore then
-            table.insert(bestIdxs, i)
+        local value = table.remove(vals, i)
+        local score = -negamax(vals, cache) - value
+        table.insert(vals, i, value)
+        if score > bestScore then
+            bestScore, bestIndices = score, { i }
+        elseif score == bestScore then
+            bestIndices[#bestIndices + 1] = i
         end
     end
 
-    coroutine.yield() -- Yield periodically to avoid freezing
+    safeYield() -- Yield periodically to avoid freezing
 
-    local idx = bestIdxs[math.random(#bestIdxs)]
-    return edges[idx]
+    local choice = bestIndices[math.random(#bestIndices)]
+    return edges[choice]
 end
 
--- Perfect Berlekamp endgame solver with dynamic programming tie-breaking
-local function berlekampSolver(board)
-    local comps = collectHotComponents(board)
+function Endgame.berlekampSolver(board, snapshot)
+    snapshot = snapshot or EdgeUtils.classify(board)
+    local comps = Components.collectHot(board)
     if #comps == 0 then
-        comps = collectColdComponents(board)
+        comps = Components.collectCold(board)
         if #comps == 0 then
-            local f = freeEdges(board)
-            return f[math.random(#f)]
+            return snapshot.free[math.random(#snapshot.free)]
         end
     end
 
     local state = componentState(comps)
     local memo = {}
-    local bestScore, best = -math.huge, {}
+    local bestScore, bestEdges = -math.huge, {}
 
     for _, comp in ipairs(comps) do
         local nextState = removeComponent(state, comp.isLoop, comp.len)
@@ -348,100 +384,283 @@ local function berlekampSolver(board)
         end
 
         if worst > bestScore then
-            bestScore, best = worst, { comp.edge }
+            bestScore, bestEdges = worst, { comp.edge }
         elseif worst == bestScore then
-            table.insert(best, comp.edge)
+            bestEdges[#bestEdges + 1] = comp.edge
         end
     end
 
-    if #best == 0 then
-        return negamaxSolver(board)
+    if #bestEdges == 0 then
+        return Endgame.negamaxSolver(board, snapshot)
     end
-    return best[math.random(#best)]
+    return bestEdges[math.random(#bestEdges)]
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 2. HIGHER‑ORDER WRAPPERS
+-- 5. SEARCH-BASED EXPERT SUPPORT
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Inject a random blunder with probability p, otherwise call fn
-local function withBlunder(fn, p)
+local Expert = {}
+
+local function scoreDiff(board)
+    local p = board.currentPlayer
+    return board.score[p] - board.score[3 - p]
+end
+
+local function evaluateTerminal(board)
+    if board:isGameOver() then
+        return scoreDiff(board)
+    end
+
+    local comps = Components.collectHot(board)
+    if #comps == 0 then
+        comps = Components.collectCold(board)
+        if #comps == 0 then
+            return scoreDiff(board)
+        end
+    end
+
+    local future = solveComponents(componentState(comps), {})
+    return scoreDiff(board) + future
+end
+
+local function applyMove(board, edge)
+    local state = {
+        prevPlayer = board.currentPlayer,
+        prevScores = { board.score[1], board.score[2] },
+        edge = edge,
+        edgeOwner = board.edgeOwner[edge],
+        boxes = {}
+    }
+    for _, boxId in ipairs(board.edgeBoxes[edge] or {}) do
+        state.boxes[#state.boxes + 1] = { id = boxId, owner = board.boxOwner[boxId] }
+    end
+    board:playEdge(edge)
+    return state
+end
+
+local function undoMove(board, state)
+    board.currentPlayer = state.prevPlayer
+    board.score[1], board.score[2] = state.prevScores[1], state.prevScores[2]
+    board.edgesFilled[state.edge] = nil
+    board.edgeOwner[state.edge] = state.edgeOwner
+    for _, info in ipairs(state.boxes) do
+        board.boxOwner[info.id] = info.owner
+    end
+end
+
+local function selectTopSafes(board, safes, limit)
+    local count = #safes
+    if count <= limit then return safes end
+    local scored = {}
+    for _, edge in ipairs(safes) do
+        scored[#scored + 1] = {
+            edge = edge,
+            score = Heuristics.scoreSafeEdge(board, edge)
+        }
+    end
+    table.sort(scored, function(a, b) return a.score > b.score end)
+    local top = {}
+    for i = 1, math.min(limit, #scored) do
+        top[i] = scored[i].edge
+    end
+    return top
+end
+
+local function evaluateForPlayer(board, rootPlayer)
+    local value = evaluateTerminal(board)
+    if board.currentPlayer ~= rootPlayer then
+        value = -value
+    end
+    return value
+end
+
+local SAFE_EVAL_LIMIT   <const> = 4
+local CLOSER_EVAL_LIMIT <const> = 5
+local SAFE_DEPTH_LIMIT  <const> = 2
+local SAFE_DEPTH_MAX_DOTS <const> = 6
+local SACRIFICE_LIMIT   <const> = 3
+local SACRIFICE_THRESHOLD <const> = 0.75
+local SACRIFICE_SAFE_CAP <const> = 2
+
+function Expert.chooseMove(board, snapshot)
+    snapshot = snapshot or EdgeUtils.classify(board)
+    local rootPlayer = board.currentPlayer
+
+    if #snapshot.closers > 0 then
+        local bestEdge, bestScore = nil, -math.huge
+        local candidates = snapshot.closers
+        if #candidates > CLOSER_EVAL_LIMIT then
+            candidates = selectTopSafes(board, candidates, CLOSER_EVAL_LIMIT)
+        end
+        for _, edge in ipairs(candidates) do
+            local state = applyMove(board, edge)
+            local score = evaluateForPlayer(board, rootPlayer)
+            undoMove(board, state)
+            if score > bestScore then
+                bestScore, bestEdge = score, edge
+            end
+        end
+        return bestEdge
+    end
+
+    local safeCount = #snapshot.safes
+
+    if safeCount > 0 then
+        local function evaluateSafeEdge(edge)
+            local state = applyMove(board, edge)
+            local baseline = evaluateForPlayer(board, rootPlayer)
+            local adjusted = baseline
+
+            if SAFE_DEPTH_LIMIT > 0 and board.DOTS <= SAFE_DEPTH_MAX_DOTS then
+                local peerSnapshot = EdgeUtils.classify(board)
+                if #peerSnapshot.safes > 0 then
+                    local peers = selectTopSafes(board, peerSnapshot.safes, SAFE_EVAL_LIMIT)
+                    local peerWorst = math.huge
+                    for _, peerEdge in ipairs(peers) do
+                        local peerState = applyMove(board, peerEdge)
+                        local peerScore = evaluateForPlayer(board, rootPlayer)
+                        undoMove(board, peerState)
+                        if peerScore < peerWorst then peerWorst = peerScore end
+                    end
+                    adjusted = math.min(adjusted, peerWorst)
+                end
+            end
+
+            undoMove(board, state)
+            return adjusted
+        end
+
+        local safeBestEdge, safeBestScore = nil, -math.huge
+        local safeCandidates = selectTopSafes(board, snapshot.safes, SAFE_EVAL_LIMIT)
+        for _, edge in ipairs(safeCandidates) do
+            local sc = evaluateSafeEdge(edge)
+            if sc > safeBestScore then
+                safeBestScore, safeBestEdge = sc, edge
+            end
+        end
+
+        local safeLookup = {}
+        for _, e in ipairs(snapshot.safes) do safeLookup[e] = true end
+
+        local sacrifices = {}
+        local comps = Components.collectCold(board)
+        for _, comp in ipairs(comps) do
+            if comp.edge and not safeLookup[comp.edge] then
+                sacrifices[#sacrifices + 1] = { edge = comp.edge, len = comp.len }
+            end
+        end
+        if #sacrifices > 1 then
+            table.sort(sacrifices, function(a, b) return a.len > b.len end)
+        end
+
+        local sacrificeBestEdge, sacrificeBestScore = nil, -math.huge
+        local sacLimit = math.min(SACRIFICE_LIMIT, #sacrifices)
+        for i = 1, sacLimit do
+            local edge = sacrifices[i].edge
+            local state = applyMove(board, edge)
+            local score = evaluateForPlayer(board, rootPlayer)
+            undoMove(board, state)
+            if score > sacrificeBestScore then
+                sacrificeBestScore, sacrificeBestEdge = score, edge
+            end
+        end
+
+        local allowSacrifice = (safeCount <= SACRIFICE_SAFE_CAP)
+            and (not safeBestEdge or safeBestScore < 0)
+
+        if sacrificeBestEdge
+        and allowSacrifice
+        and (not safeBestEdge or sacrificeBestScore > safeBestScore + SACRIFICE_THRESHOLD)
+        then
+            return sacrificeBestEdge
+        end
+        if safeBestEdge then
+            return safeBestEdge
+        end
+    end
+
+    return Endgame.berlekampSolver(board, snapshot)
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 6. STRATEGY HELPERS
+-- ═══════════════════════════════════════════════════════════════════════════
+
+local StrategyUtils = {}
+
+function StrategyUtils.withBlunder(fn, p)
     return function(board)
-        if randomChance(p) then
-            local all = freeEdges(board)
-            return all[math.random(#all)]
+        if EdgeUtils.randomChance(p) then
+            local freeEdges = board:listFreeEdges()
+            return freeEdges[math.random(#freeEdges)]
         else
             return fn(board)
         end
     end
 end
 
--- Random among the top‑K by scorer
-local function pickTopKRandom(board, edges, scorer, K)
+function StrategyUtils.pickTopKRandom(board, edges, scorer, k)
     local scored = {}
-    for _, e in ipairs(edges) do
-        table.insert(scored, { edge=e, score=scorer(board,e) })
+    for _, edge in ipairs(edges) do
+        scored[#scored + 1] = { edge = edge, score = scorer(board, edge) }
     end
-    table.sort(scored, function(a,b) return a.score>b.score end)
-    local cap = math.min(K, #scored)
+    table.sort(scored, function(a, b) return a.score > b.score end)
+
+    local cap = math.min(k, #scored)
     local subset = {}
-    for i=1,cap do subset[i]=scored[i].edge end
+    for i = 1, cap do
+        subset[i] = scored[i].edge
+    end
     return subset[math.random(#subset)]
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 3. STRATEGIES
+-- 7. DIFFICULTY POLICIES
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local Strategies = {}
 
--- EASY: 10% random → take box → random safe → random
-Strategies.easy = withBlunder(function(board)
-    local c = closers(board)
-    if #c>0 then return c[1] end
-    local s = safes(board)
-    if #s>0 then return s[math.random(#s)] end
-    return freeEdges(board)[1]
-end, 0.10)
-
--- MEDIUM: take box → depth‑1 pickTopKRandom → negamax
-Strategies.medium = function(board)
-    local c = closers(board)
-    if #c>0 then return c[1] end
-    local s = safes(board)
-    if #s>0 then return pickTopKRandom(board, s, scoreSafeEdge, board.DOTS) end
-    return negamaxSolver(board)
-end
-
--- HARD: take box → depth‑2 bestSafeEdge → negamax when safes dry up
-Strategies.hard = function(board)
-    local c = closers(board)
-    if #c>0 then return c[1] end
-
-    local s = safes(board)
-    if #s>0 then
-        -- **2‑ply lookahead** on safe edges:
-        return bestSafeEdge(board, s)
+Strategies.easy = StrategyUtils.withBlunder(function(board)
+    local snapshot = EdgeUtils.classify(board)
+    if #snapshot.closers > 0 then
+        return snapshot.closers[math.random(#snapshot.closers)]
     end
+    if #snapshot.safes > 0 then
+        return snapshot.safes[math.random(#snapshot.safes)]
+    end
+    return snapshot.free[math.random(#snapshot.free)]
+end, 0.30)
 
-    -- no safes left → full chain/loop solver
-    return negamaxSolver(board)
+Strategies.medium = function(board)
+    local snapshot = EdgeUtils.classify(board)
+    if #snapshot.closers > 0 then
+        return snapshot.closers[1]
+    end
+    if #snapshot.safes > 0 then
+        return StrategyUtils.pickTopKRandom(board, snapshot.safes, Heuristics.scoreSafeEdge, board.DOTS)
+    end
+    return Endgame.negamaxSolver(board, snapshot)
 end
 
--- EXPERT: same as hard early, then perfect Berlekamp endgame play
+Strategies.hard = function(board)
+    local snapshot = EdgeUtils.classify(board)
+    if #snapshot.closers > 0 then
+        return snapshot.closers[1]
+    end
+    if #snapshot.safes > 0 then
+        return Heuristics.bestSafeEdge(board, snapshot.safes)
+    end
+    return Endgame.negamaxSolver(board, snapshot)
+end
+
 Strategies.expert = function(board)
-    local c = closers(board)
-    if #c>0 then return c[1] end
-
-    -- drain safes first (depth‑2)
-    local s = safes(board)
-    if #s>0 then return bestSafeEdge(board, s) end
-
-    return berlekampSolver(board)
+    local snapshot = EdgeUtils.classify(board)
+    return Expert.chooseMove(board, snapshot)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- Public API
+-- 8. PUBLIC API
 -- ═══════════════════════════════════════════════════════════════════════════
 
 function Ai.setDifficulty(level)
