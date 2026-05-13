@@ -7,6 +7,7 @@ local gfx <const> = playdate.graphics
 local UI = {}
 UI.__index = UI
 local Characters = import "characters"
+UI.Characters = Characters   -- exposed so main.lua can render chunky glyphs
 
 -- Visual constants ----------------------------------------------------------
 local SIDE_COL_W   <const> = 60   -- width of each side column (px)
@@ -16,22 +17,16 @@ local DOT_SIZE     <const> = 4    -- radius of dots (px)
 UI.DOT_SIZE = DOT_SIZE            -- for external use
 local DIGIT_SCALE  <const> = 6    -- chunky‑digit scale factor
 
+-- Box-claim animation (expand-and-settle) ----------------------------------
+local CLAIM_ANIM_MS    <const> = 260    -- total duration in milliseconds
+local CLAIM_OVERSHOOT  <const> = 1.25   -- scale at the peak of the pop
+
 -- Chunky digits --------------------------------------------------------------
 local drawChunkyChar = Characters.drawChunkyChar
 
 -------------------------------------------------------------------------------
--- Build reverse look‑ups for edges and boxes
+-- Build reverse look‑up for boxes (edge lookup lives on the board)
 -------------------------------------------------------------------------------
-function UI:buildCoordToEdge()
-    self.coordToEdge = {}
-    for e, coords in ipairs(self.board.edgeToCoord) do
-        local r, c, d = table.unpack(coords)
-        self.coordToEdge[r] = self.coordToEdge[r] or {}
-        self.coordToEdge[r][c] = self.coordToEdge[r][c] or {}
-        self.coordToEdge[r][c][d] = e
-    end
-end
-
 function UI:buildBoxToCoord()
     self.boxToCoord = {}
     local idx = 1
@@ -105,9 +100,9 @@ function UI.new(board, opts)
     self.board = board
     opts = opts or {}
     self.onRestart = opts.onRestart
+    self.sound     = opts.sound
 
-    -- Build look‑ups
-    self:buildCoordToEdge()
+    -- Build box lookup (edge lookup is on the board)
     self:buildBoxToCoord()
 
     -- Spacing & offsets
@@ -124,6 +119,8 @@ function UI.new(board, opts)
 
     -- Cursor
     self.cursorEdge = 1
+    -- Per-box claim-animation start times (boxId -> ms timestamp)
+    self.boxAnimStart = {}
     playdate.display.setRefreshRate(20)
     return self
 end
@@ -133,15 +130,7 @@ end
 -------------------------------------------------------------------------------
 function UI:handleInput()
     if playdate.buttonJustPressed(playdate.kButtonA) and self.board:isGameOver() then
-        if self.onRestart then
-            self.onRestart()
-        else
-            local BoardClass = getmetatable(self.board).__index
-            self.board = BoardClass.new(self.board.DOTS)
-            self:buildCoordToEdge()
-            self:buildBoxToCoord()
-            self.cursorEdge = 1
-        end
+        self.onRestart()
         return
     end
 
@@ -158,26 +147,28 @@ function UI:handleInput()
     if playdate.buttonJustPressed(playdate.kButtonDown)  then newR = r%maxR+1 end
 
     if newR~=r or newC~=c then
-        local e = self.coordToEdge[newR] and self.coordToEdge[newR][newC] and
-                  self.coordToEdge[newR][newC][dir]
+        local c2e = self.board.coordToEdge
+        local e = c2e[newR] and c2e[newR][newC] and c2e[newR][newC][dir]
         if e then self.cursorEdge = e end
     end
 
     if playdate.buttonJustPressed(playdate.kButtonA) then
         if self.mode ~= "pvc" or self.board.currentPlayer == 1 then
-            self.board:playEdge(self.cursorEdge)
+            local claimed = self.board:playEdge(self.cursorEdge)
+            if claimed and claimed > 0 and self.sound then
+                self.sound.done(self.board.chainLen - 1)
+            end
         end
     end
     if playdate.buttonJustPressed(playdate.kButtonB) then
+        local c2e = self.board.coordToEdge
         local altDir = (dir==self.board.H) and self.board.V or self.board.H
-        local e2 = self.coordToEdge[r] and self.coordToEdge[r][c] and
-                   self.coordToEdge[r][c][altDir]
+        local e2 = c2e[r] and c2e[r][c] and c2e[r][c][altDir]
         if not e2 then
             local ar, ac = r, c
             if altDir==self.board.H then ac = math.min(c, self.board.DOTS-1)
             else                  ar = math.min(r, self.board.DOTS-1) end
-            e2 = self.coordToEdge[ar] and self.coordToEdge[ar][ac] and
-                 self.coordToEdge[ar][ac][altDir]
+            e2 = c2e[ar] and c2e[ar][ac] and c2e[ar][ac][altDir]
         end
         if e2 then self.cursorEdge = e2 end
     end
@@ -187,15 +178,9 @@ end
 -- Draw everything
 -------------------------------------------------------------------------------
 function UI:draw()
-    gfx.clear()
     gfx.setColor(gfx.kColorBlack)
 
-    -- Tally scores -----------------------------------------
-    local p1Score, p2Score = 0, 0
-    for _, owner in pairs(self.board.boxOwner) do
-        if owner == 1 then p1Score = p1Score + 1
-        elseif owner == 2 then p2Score = p2Score + 1 end
-    end
+    local p1Score, p2Score = self.board.score[1], self.board.score[2]
 
     -- Dots
     for rr=1,self.board.DOTS do
@@ -220,26 +205,42 @@ function UI:draw()
         end
     end
 
-    -- Claimed boxes: draw a smaller centered square
+    -- Claimed boxes: animated expand-and-settle square
+    local nowMs = playdate.getCurrentTimeMilliseconds()
+    local baseSize = math.floor(self.spacing * 0.5)
     for id, bc in ipairs(self.boxToCoord) do
         local owner = self.board.boxOwner[id]
         if owner then
-            local br, bc2 = table.unpack(bc)
-            -- top‐left of the full box cell
-            local boxX = self.left + (bc2 - 1) * self.spacing
-            local boxY = self.top  + (br  - 1) * self.spacing
+            local startMs = self.boxAnimStart[id]
+            if not startMs then
+                startMs = nowMs
+                self.boxAnimStart[id] = startMs
+            end
 
-            -- inner square is half the box’s width
-            local innerSize = math.floor(self.spacing * 0.5)
-            -- inset to center it
-            local inset = math.floor((self.spacing - innerSize) / 2)
-            local x = boxX + inset
-            local y = boxY + inset
+            local progress = (nowMs - startMs) / CLAIM_ANIM_MS
+            if progress < 0 then progress = 0
+            elseif progress > 1 then progress = 1 end
 
-            -- tint by owner: solid black for P1, 50% dither for P2
+            -- Piecewise scale: 0 → overshoot in first half, overshoot → 1.0 in second.
+            local scale
+            if progress < 0.5 then
+                scale = progress * 2 * CLAIM_OVERSHOOT
+            else
+                scale = CLAIM_OVERSHOOT - (progress - 0.5) * 2 * (CLAIM_OVERSHOOT - 1)
+            end
+
+            local size = math.floor(baseSize * scale)
+            if size < 1 then size = 1 end
+            local boxX = self.left + (bc[2] - 1) * self.spacing
+            local boxY = self.top  + (bc[1] - 1) * self.spacing
+            local cx = boxX + self.spacing * 0.5
+            local cy = boxY + self.spacing * 0.5
+            local x = math.floor(cx - size * 0.5)
+            local y = math.floor(cy - size * 0.5)
+
             gfx.setDitherPattern(owner == 2 and 0.5 or 0)
-            gfx.fillRect(x, y, innerSize, innerSize)
-            gfx.setDitherPattern(0)  -- reset for the next UI elements
+            gfx.fillRect(x, y, size, size)
+            gfx.setDitherPattern(0)
         end
     end
 
@@ -273,15 +274,68 @@ function UI:draw()
 
     -- Game‑over
     if self.board:isGameOver() then
-        local msg = "Game Over (A to restart)"
         local f = gfx.getSystemFont()
-        local tw,th = f:getTextWidth(msg), f:getHeight()
-        local px,py = self.left + ((self.board.DOTS-1)*self.spacing - tw -20)/2,
-                       self.top  + ((self.board.DOTS-1)*self.spacing - th -10)/2
-        gfx.setColor(gfx.kColorWhite); gfx.fillRect(px,py,tw+20,th+10)
-        gfx.setDitherPattern(0.5); gfx.setColor(gfx.kColorBlack)
-        gfx.drawRect(px,py,tw+20,th+10); gfx.setDitherPattern(0)
-        gfx.drawText(msg, px+10, py+5)
+        local th = f:getHeight()
+
+        local winnerLine
+        if p1Score > p2Score then winnerLine = "P1 wins!"
+        elseif p2Score > p1Score then winnerLine = "P2 wins!"
+        else winnerLine = "It's a draw" end
+
+        local lc1, lc2 = self.board.longestChain[1], self.board.longestChain[2]
+        local chainLine
+        if lc1 == lc2 then
+            chainLine = "Longest chain: tied at " .. lc1
+        else
+            local who = (lc1 > lc2) and "P1" or "P2"
+            chainLine = "Longest chain: " .. who .. " - " .. math.max(lc1, lc2)
+        end
+
+        local endMs = self.board.endMs or playdate.getCurrentTimeMilliseconds()
+        local secs = math.floor((endMs - self.board.startMs) / 1000)
+        local mm = math.floor(secs / 60)
+        local ss = secs % 60
+        local timeLine = string.format("Time: %d:%02d", mm, ss)
+
+        local lines = {}
+
+        -- Newly-unlocked badges (toasted at the top, max 3 shown).
+        if self.newBadges and #self.newBadges > 0 then
+            local cap = math.min(3, #self.newBadges)
+            for i = 1, cap do
+                lines[#lines + 1] = "* Unlocked: " .. self.newBadges[i].label
+            end
+            if #self.newBadges > cap then
+                lines[#lines + 1] = "+" .. (#self.newBadges - cap) .. " more"
+            end
+        end
+
+        lines[#lines + 1] = "Game Over"
+        lines[#lines + 1] = winnerLine
+        lines[#lines + 1] = chainLine
+        lines[#lines + 1] = timeLine
+        lines[#lines + 1] = "(A to restart)"
+
+        local maxW = 0
+        for _, l in ipairs(lines) do
+            local w = f:getTextWidth(l)
+            if w > maxW then maxW = w end
+        end
+        local lineH = th + 2
+        local panelW = maxW + 20
+        local panelH = #lines * lineH + 10
+
+        local sw, sh = playdate.display.getSize()
+        local px = math.floor((sw - panelW) / 2)
+        local py = math.floor((sh - panelH) / 2)
+
+        gfx.setColor(gfx.kColorWhite); gfx.fillRect(px, py, panelW, panelH)
+        gfx.setDitherPattern(0.5);     gfx.setColor(gfx.kColorBlack)
+        gfx.drawRect(px, py, panelW, panelH); gfx.setDitherPattern(0)
+        for i, l in ipairs(lines) do
+            local w = f:getTextWidth(l)
+            gfx.drawText(l, px + math.floor((panelW - w) / 2), py + 5 + (i - 1) * lineH)
+        end
     end
 end
 

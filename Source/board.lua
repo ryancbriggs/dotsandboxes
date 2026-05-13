@@ -70,6 +70,12 @@ function Board.new(dots)
     self.score         = { 0, 0 }
     self.currentPlayer = 1
 
+    -- Stats / animation seeds -----------------------------------------------
+    self.chainLen      = 0                -- boxes claimed in current chain (resets on non-claim)
+    self.longestChain  = { 0, 0 }         -- best chainLen reached per player
+    self.startMs       = playdate.getCurrentTimeMilliseconds()
+    self.endMs         = nil
+
     return self
 end
 
@@ -86,7 +92,7 @@ end
 -- Play an edge ---------------------------------------------------------------
 -------------------------------------------------------------------------------
 function Board:playEdge(e)
-    if self.edgesFilled[e] then return false end
+    if self.edgesFilled[e] then return nil end
     self.edgesFilled[e] = true
     self.edgeOwner[e]   = self.currentPlayer
 
@@ -108,8 +114,20 @@ function Board:playEdge(e)
             end
         end
     end
-    if claimed == 0 then self.currentPlayer = 3 - self.currentPlayer end
-    return true
+    if claimed > 0 then
+        self.chainLen = self.chainLen + claimed
+        local p = self.currentPlayer
+        if self.chainLen > self.longestChain[p] then
+            self.longestChain[p] = self.chainLen
+        end
+    else
+        self.chainLen = 0
+        self.currentPlayer = 3 - self.currentPlayer
+    end
+    if self:isGameOver() and not self.endMs then
+        self.endMs = playdate.getCurrentTimeMilliseconds()
+    end
+    return claimed
 end
 
 -------------------------------------------------------------------------------

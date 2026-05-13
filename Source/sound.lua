@@ -32,7 +32,9 @@ do
 end
 
 
--- 3) "Done" completion click: layered square‑wave thump + noise burst
+-- 3) "Done" completion click: layered square‑wave thump + noise burst.
+-- Pass chainIndex (0-based: 0 for first box of a chain) to make the pitch
+-- rise as a chain grows — longer chains feel more satisfying.
 do
     local thump = synth.new(playdate.sound.kWaveSquare)
     thump:setADSR(0.002, 0.05, 0, 0.02)
@@ -42,9 +44,16 @@ do
     noise:setADSR(0.001, 0.03, 0, 0)
     noise:setVolume(0.2)
 
-    function M.done()
-        thump:playNote(220, nil, 0.1)  -- low C3 thump
-        noise:playNote(440, nil, 0.1)  -- noise overlay
+    local BASE_HZ <const> = 220     -- A3
+    local MAX_STEPS <const> = 12    -- one octave cap
+
+    function M.done(chainIndex)
+        chainIndex = chainIndex or 0
+        if chainIndex < 0 then chainIndex = 0 end
+        if chainIndex > MAX_STEPS then chainIndex = MAX_STEPS end
+        local hz = BASE_HZ * 2^(chainIndex / 12)  -- one semitone per step
+        thump:playNote(hz, nil, 0.1)
+        noise:playNote(440, nil, 0.1)
     end
 end
 
