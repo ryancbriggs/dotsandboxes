@@ -105,7 +105,10 @@ static int solve(CompState* s) {
 
     int best = -32768;
 
-    // Try removing one chain of each length present.
+    // Try removing one chain of each length present. DX is geometrically
+    // possible for any chain of length >= 2 (opp takes L-2, mover gets the
+    // 2-domino). The L=2/3 cases matter on small boards where short chains
+    // are common.
     for (int len = 1; len <= MAX_LEN; len++) {
         uint8_t prev = s->chains[len];
         if (prev == 0) continue;
@@ -114,14 +117,15 @@ static int solve(CompState* s) {
         s->chains[len] = prev;
 
         int worst = -len - nextVal;
-        if (len >= 4) {
+        if (len >= 2) {
             int keep = -(len - 4) + nextVal;
             if (keep < worst) worst = keep;
         }
         if (worst > best) best = worst;
     }
 
-    // Try removing one loop of each length present.
+    // Try removing one loop of each length present. Loop DX gives back a
+    // 4-domino (opp takes L-4, mover gets 4), so requires L >= 4.
     for (int len = 1; len <= MAX_LEN; len++) {
         uint8_t prev = s->loops[len];
         if (prev == 0) continue;
@@ -130,7 +134,7 @@ static int solve(CompState* s) {
         s->loops[len] = prev;
 
         int worst = -len - nextVal;
-        if (len >= 6) {
+        if (len >= 4) {
             int keep = -(len - 8) + nextVal;
             if (keep < worst) worst = keep;
         }

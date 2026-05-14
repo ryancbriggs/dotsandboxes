@@ -105,8 +105,15 @@ end
 local Components = {}
 
 -- Detect prospective chains/loops with exactly two sides filled per box.
-function Components.collectCold(board)
+-- `excludedBoxes` (optional) is a {[boxId]=true} set whose boxes will be
+-- treated as already-seen; useful when the caller has identified those
+-- boxes as belonging to an active hot chain that should be analyzed
+-- separately rather than rolled into a cold component.
+function Components.collectCold(board, excludedBoxes)
     local comps, seen = {}, {}
+    if excludedBoxes then
+        for k in pairs(excludedBoxes) do seen[k] = true end
+    end
     local BE, EB = board.boxEdges, board.edgeBoxes
 
     local function dfs(boxId, comp)
@@ -206,7 +213,7 @@ local function solveComponents(state)
             chains[len] = count
 
             local worst = -len - nextVal
-            if len >= 4 then
+            if len >= 2 then
                 local keep = -(len - 4) + nextVal
                 if keep < worst then worst = keep end
             end
@@ -225,7 +232,7 @@ local function solveComponents(state)
             loops[len] = count
 
             local worst = -len - nextVal
-            if len >= 6 then
+            if len >= 4 then
                 local keep = -(len - 8) + nextVal
                 if keep < worst then worst = keep end
             end
@@ -435,27 +442,6 @@ local function endgameFuture(comps)
     return solveComponents(componentState(comps))
 end
 
-local function evaluateTerminal(board)
-    if board:isGameOver() then
-        return scoreDiff(board)
-    end
-
-    local comps = Components.collectCold(board)
-    if #comps == 0 then
-        return scoreDiff(board)
-    end
-
-    local startMs = Ai.debugLogging and nowMs() or nil
-    local future = endgameFuture(comps)
-    if startMs then
-        local elapsed = nowMs() - startMs
-        profSolveCalls   = profSolveCalls + 1
-        profSolveTotalMs = profSolveTotalMs + elapsed
-        if profSolveCalls == 1 then profSolveFirstMs = elapsed end
-    end
-    return scoreDiff(board) + future
-end
-
 local function applyMove(board, edge)
     -- Defensive: refuse to "apply" an already-filled edge. If we did, the
     -- corresponding undoMove would nil out edgesFilled[edge] and erase a
@@ -500,6 +486,158 @@ local function undoMove(board, state)
     applyDepth = applyDepth - 1
 end
 
+-- Find any active "hot" component (chain or loop with a 3-filled box).
+-- Returns (len, boxSet) where len is the total number of boxes in the
+-- component and boxSet is a {[boxId]=true} map of its members. If there's
+-- no 3-filled box, returns (0, nil).
+--
+-- This is the seed for evaluateTerminal's Berlekamp-style consumption: the
+-- current player will consume this component, and we compute their value
+-- analytically (greedy vs double-cross) rather than mutating the board.
+local function findHotComponent(board)
+    local boxEdges    = board.boxEdges
+    local edgeBoxes   = board.edgeBoxes
+    local edgesFilled = board.edgesFilled
+    local numBoxes    = #boxEdges
+
+    local fillCache = {}
+    local function fillCount(boxId)
+        local c = fillCache[boxId]
+        if c then return c end
+        c = 0
+        local edges = boxEdges[boxId]
+        for j = 1, #edges do
+            if edgesFilled[edges[j]] then c = c + 1 end
+        end
+        fillCache[boxId] = c
+        return c
+    end
+
+    -- Find any 3-filled box to seed the BFS.
+    local seed
+    for b = 1, numBoxes do
+        if fillCount(b) == 3 then seed = b; break end
+    end
+    if not seed then return 0, nil end
+
+    -- Walk every 2- or 3-filled box reachable through still-empty shared edges.
+    local hot = { [seed] = true }
+    local count = 1
+    local stack = { seed }
+    while #stack > 0 do
+        local cur = stack[#stack]
+        stack[#stack] = nil
+        local edges = boxEdges[cur]
+        for j = 1, #edges do
+            local e = edges[j]
+            if not edgesFilled[e] then
+                local adj = edgeBoxes[e]
+                if adj then
+                    for k = 1, #adj do
+                        local nb = adj[k]
+                        if not hot[nb] then
+                            local f = fillCount(nb)
+                            if f == 2 or f == 3 then
+                                hot[nb] = true
+                                count = count + 1
+                                stack[#stack + 1] = nb
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return count, hot
+end
+
+-- Whether the consumer of `hotBoxes` has a non-claiming move available
+-- within the hot region. The DX (double-cross) play exists only if there's
+-- at least one unfilled edge in the hot region that, if played, doesn't
+-- close any box (i.e., neither neighbor is already 3-sided).
+--
+-- The pathological case this guards against: a "ready 2-domino" hot region
+-- (two adjacent 3-sided boxes connected by one unfilled edge), which arises
+-- right after a DX play. Geometrically the consumer has no DX option there;
+-- their only move closes both boxes. Without this check the Berlekamp
+-- formula would happily apply `dx = hotLen-4-cv` and conclude the consumer
+-- can hand the domino back — they can't.
+local function hotCanDX(board, hotBoxes)
+    local edgesFilled = board.edgesFilled
+    local boxEdges    = board.boxEdges
+    local edgeBoxes   = board.edgeBoxes
+    local seenEdges   = {}
+    for boxId in pairs(hotBoxes) do
+        local edges = boxEdges[boxId]
+        for j = 1, #edges do
+            local e = edges[j]
+            if not edgesFilled[e] and not seenEdges[e] then
+                seenEdges[e] = true
+                local adj = edgeBoxes[e] or {}
+                local closes = false
+                for k = 1, #adj do
+                    local nb = adj[k]
+                    local fc = 0
+                    local nbEdges = boxEdges[nb]
+                    for m = 1, #nbEdges do
+                        if edgesFilled[nbEdges[m]] then fc = fc + 1 end
+                    end
+                    if fc == 3 then closes = true; break end
+                end
+                if not closes then return true end
+            end
+        end
+    end
+    return false
+end
+
+-- The static evaluator. Returns the value of the position to the CURRENT
+-- player (whoever is about to move). If the position has an active hot
+-- chain, applies the Berlekamp formula (greedy vs double-cross) to model
+-- optimal consumption. Otherwise just scores by cold-component analysis.
+local function evaluateTerminal(board)
+    if board:isGameOver() then
+        return scoreDiff(board)
+    end
+
+    local hotLen, hotBoxes = findHotComponent(board)
+
+    local startMs = Ai.debugLogging and nowMs() or nil
+    local comps = Components.collectCold(board, hotBoxes)
+    local coldValue = 0
+    if #comps > 0 then
+        coldValue = endgameFuture(comps)
+    end
+    if startMs then
+        local elapsed = nowMs() - startMs
+        profSolveCalls   = profSolveCalls + 1
+        profSolveTotalMs = profSolveTotalMs + elapsed
+        if profSolveCalls == 1 then profSolveFirstMs = elapsed end
+    end
+
+    if hotLen > 0 then
+        -- Current player consumes the hot component. Two options:
+        --   greedy: take all hotLen boxes, then play into cold rest as mover.
+        --   double-cross (hotLen >= 2 AND a non-claiming hot move exists):
+        --     take hotLen-2, give opp 2-domino, flip turn so opp plays cold.
+        -- Mover picks whichever maximizes their value. The geometric DX gate
+        -- (hotCanDX) is required: e.g. a "ready 2-domino" (both boxes 3-sided,
+        -- one unfilled edge between them) has no DX move available — the
+        -- consumer is forced to take it greedily.
+        local greedy = hotLen + coldValue
+        local mover
+        if hotLen >= 2 and hotCanDX(board, hotBoxes) then
+            local dx = hotLen - 4 - coldValue
+            mover = math.max(greedy, dx)
+        else
+            mover = greedy
+        end
+        return scoreDiff(board) + mover
+    end
+
+    return scoreDiff(board) + coldValue
+end
+
 local function selectTopSafes(board, safes, limit)
     local count = #safes
     if count <= limit then return safes end
@@ -526,13 +664,13 @@ local function evaluateForPlayer(board, rootPlayer)
     return value
 end
 
-local SAFE_EVAL_LIMIT   <const> = 4
-local CLOSER_EVAL_LIMIT <const> = 5
-local SAFE_DEPTH_LIMIT  <const> = 2
+local SAFE_EVAL_LIMIT     <const> = 4
+local CLOSER_EVAL_LIMIT   <const> = 5
+local SAFE_DEPTH_LIMIT    <const> = 2
 local SAFE_DEPTH_MAX_DOTS <const> = 6
-local SACRIFICE_LIMIT   <const> = 3
+local SACRIFICE_LIMIT     <const> = 4    -- a touch wider than the original 3
 local SACRIFICE_THRESHOLD <const> = 0.75
-local SACRIFICE_SAFE_CAP <const> = 2
+local SACRIFICE_SAFE_CAP  <const> = 2
 
 function Expert.chooseMove(board, snapshot)
     snapshot = snapshot or EdgeUtils.classify(board)
@@ -540,6 +678,10 @@ function Expert.chooseMove(board, snapshot)
 
     if #snapshot.closers > 0 then
         local bestEdge, bestScore = nil, -math.huge
+        local closerLog, dxLog
+        if Ai.debugLogging then closerLog, dxLog = {}, {} end
+
+        -- 1) Greedy chain continuation: take a closer.
         local candidates = snapshot.closers
         if #candidates > CLOSER_EVAL_LIMIT then
             candidates = selectTopSafes(board, candidates, CLOSER_EVAL_LIMIT)
@@ -549,10 +691,62 @@ function Expert.chooseMove(board, snapshot)
             local state = applyMove(board, edge)
             local score = evaluateForPlayer(board, rootPlayer)
             undoMove(board, state)
+            if closerLog then closerLog[#closerLog + 1] = edge .. "=" .. score end
             if score > bestScore then
                 bestScore, bestEdge = score, edge
             end
         end
+
+        -- 2) Double-cross setup: a non-closer entry edge of a cold cluster
+        -- that's adjacent to one of the current closers. Playing it flips
+        -- the turn, leaving the opponent with a 2-domino instead of the
+        -- whole chain. The evaluator (with Berlekamp) will score this
+        -- correctly; we just have to put it in the choice set.
+        local closerLookup = {}
+        for _, e in ipairs(snapshot.closers) do closerLookup[e] = true end
+
+        local dxCandidates = {}
+        local comps = Components.collectCold(board)
+        for _, comp in ipairs(comps) do
+            if comp.entryEdges and #comp.entryEdges >= 2 then
+                local hasCloserEntry, nonCloserEntries = false, {}
+                for _, e in ipairs(comp.entryEdges) do
+                    if closerLookup[e] then
+                        hasCloserEntry = true
+                    else
+                        nonCloserEntries[#nonCloserEntries + 1] = e
+                    end
+                end
+                if hasCloserEntry then
+                    for _, e in ipairs(nonCloserEntries) do
+                        dxCandidates[#dxCandidates + 1] = e
+                    end
+                end
+            end
+        end
+
+        local dxLimit = math.min(4, #dxCandidates)
+        for i = 1, dxLimit do
+            yieldIfBudgetExceeded()
+            local edge = dxCandidates[i]
+            local state = applyMove(board, edge)
+            local score = evaluateForPlayer(board, rootPlayer)
+            undoMove(board, state)
+            if dxLog then dxLog[#dxLog + 1] = edge .. "=" .. score end
+            if score > bestScore then
+                bestScore, bestEdge = score, edge
+            end
+        end
+
+        if Ai.debugLogging and dxLog and #dxLog > 0 then
+            local hotLen = select(1, findHotComponent(board))
+            print(string.format(
+                "[AI DX] hot=%d pick=%s score=%s closers=[%s] dx=[%s]",
+                hotLen, tostring(bestEdge), tostring(bestScore),
+                table.concat(closerLog, ","), table.concat(dxLog, ",")
+            ))
+        end
+
         return bestEdge
     end
 
@@ -603,8 +797,12 @@ function Expert.chooseMove(board, snapshot)
                 sacrifices[#sacrifices + 1] = { edge = comp.edge, len = comp.len }
             end
         end
+        -- Evaluate the SHORTEST sacrifices first: they're cheaper to give up
+        -- and are almost always the right hand-out when one is needed. The
+        -- SACRIFICE_SAFE_CAP / SACRIFICE_THRESHOLD gates below still guard
+        -- against picking one in the wrong situation.
         if #sacrifices > 1 then
-            table.sort(sacrifices, function(a, b) return a.len > b.len end)
+            table.sort(sacrifices, function(a, b) return a.len < b.len end)
         end
 
         local sacrificeBestEdge, sacrificeBestScore = nil, -math.huge
@@ -620,6 +818,11 @@ function Expert.chooseMove(board, snapshot)
             end
         end
 
+        -- Sacrifice gates: the evaluator currently doesn't simulate the
+        -- opponent grabbing the closer chain a sacrifice creates, so it
+        -- systematically over-rates sacrifices. Until we add a quiescence
+        -- pass, only switch from safe to sacrifice when (a) safe options
+        -- are running out and (b) the sacrifice is clearly better.
         local allowSacrifice = (safeCount <= SACRIFICE_SAFE_CAP)
             and (not safeBestEdge or safeBestScore < 0)
 
