@@ -163,6 +163,9 @@ local function returnToMainMenu()
     selectedOption = 1
 end
 playdate.getSystemMenu():addMenuItem("Main Menu", returnToMainMenu)
+playdate.getSystemMenu():addCheckmarkMenuItem("Debug logs", false, function(value)
+    Ai.debugLogging = value
+end)
 
 -- initialize a new game ----------------------------------------------------
 local function initGame(mode)

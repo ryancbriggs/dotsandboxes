@@ -8,6 +8,13 @@
 
 local Ai = {}
 Ai.difficulty = "medium"
+Ai.debugLogging = false   -- toggled via system menu; logs go to the tethered console
+
+-- Per-move profile counters; reset in Ai.beginChooseMove.
+local profSolveCalls   = 0
+local profSolveTotalMs = 0
+local profSolveFirstMs = 0
+local profApplyCalls   = 0
 
 -- ─── Coroutine scheduler state ───────────────────────────────────────────
 local SLICE_BUDGET_MS <const> = 15          -- per-frame compute slice
@@ -410,6 +417,24 @@ local function scoreDiff(board)
     return board.score[p] - board.score[3 - p]
 end
 
+-- Compute the endgame future-value either via the C kernel (`dotsai.solve`)
+-- when it's been loaded by the C extension, or the Lua `solveComponents`
+-- fallback. The C path is ~10x faster on device for the mid-late game hot
+-- band; Lua remains as a no-build-deps fallback.
+local function endgameFuture(comps)
+    if dotsai and dotsai.solve then
+        local chains, loops = {}, {}
+        for _, comp in ipairs(comps) do
+            if comp.isLoop then loops[#loops + 1] = comp.len
+            else                chains[#chains + 1] = comp.len end
+        end
+        local chainStr = (#chains > 0) and string.char(table.unpack(chains)) or ""
+        local loopStr  = (#loops  > 0) and string.char(table.unpack(loops))  or ""
+        return dotsai.solve(chainStr, loopStr)
+    end
+    return solveComponents(componentState(comps))
+end
+
 local function evaluateTerminal(board)
     if board:isGameOver() then
         return scoreDiff(board)
@@ -420,7 +445,14 @@ local function evaluateTerminal(board)
         return scoreDiff(board)
     end
 
-    local future = solveComponents(componentState(comps))
+    local startMs = Ai.debugLogging and nowMs() or nil
+    local future = endgameFuture(comps)
+    if startMs then
+        local elapsed = nowMs() - startMs
+        profSolveCalls   = profSolveCalls + 1
+        profSolveTotalMs = profSolveTotalMs + elapsed
+        if profSolveCalls == 1 then profSolveFirstMs = elapsed end
+    end
     return scoreDiff(board) + future
 end
 
@@ -447,6 +479,7 @@ local function applyMove(board, edge)
         state.boxes[#state.boxes + 1] = { id = boxId, owner = board.boxOwner[boxId] }
     end
     applyDepth = applyDepth + 1
+    if Ai.debugLogging then profApplyCalls = profApplyCalls + 1 end
     board:playEdge(edge)
     return state
 end
@@ -779,6 +812,8 @@ end
 function Ai.beginChooseMove(board)
     Ai.cancel()
     solveMemo = {}
+    if dotsai and dotsai.solve_reset then dotsai.solve_reset() end
+    profSolveCalls, profSolveTotalMs, profSolveFirstMs, profApplyCalls = 0, 0, 0, 0
     runtime.board   = board
     runtime.startMs = nowMs()
     local range = MIN_DELAY_RANGE[Ai.difficulty] or { 0, 0 }
@@ -801,11 +836,31 @@ function Ai.tick()
         runtime.sliceDeadline = nowMs() + SLICE_BUDGET_MS
         local ok, val = coroutine.resume(runtime.coro)
         if not ok then
+            if Ai.debugLogging then
+                print("[AI] coroutine error: " .. tostring(val))
+            end
             -- Coroutine errored; fall back to any free edge.
             local frees = runtime.board:listFreeEdges()
             runtime.result = frees[math.random(#frees)] or 1
         elseif coroutine.status(runtime.coro) == "dead" then
             runtime.result = val
+            if Ai.debugLogging then
+                local thinkMs = nowMs() - runtime.startMs
+                local b = runtime.board
+                local free = #b:listFreeEdges()
+                local kernel = (dotsai and dotsai.solve) and "C" or "L"
+                print(string.format(
+                    "[AI %s] %s %dx%d  edge=%s  think=%dms  apply=%d  solve=%d(total=%dms,first=%dms)  free=%d  heap=%.1fKB",
+                    kernel,
+                    Ai.difficulty, b.DOTS, b.DOTS,
+                    tostring(runtime.result),
+                    thinkMs,
+                    profApplyCalls,
+                    profSolveCalls, profSolveTotalMs, profSolveFirstMs,
+                    free,
+                    collectgarbage("count")
+                ))
+            end
         end
     end
 
