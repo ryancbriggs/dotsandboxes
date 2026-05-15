@@ -223,42 +223,57 @@ end
 local SETTINGS_ROW_COUNT <const> = 4
 local SETTINGS_ROW_RESET <const> = 4
 
+local function drawSettingsCursor(y)
+    local BOX = 14
+    local x = 30
+    gfx.fillRect(x, y + 1, BOX, BOX)
+end
+
+local function drawSettingsValue(text, y)
+    local sw = playdate.display.getWidth()
+    local rightX = sw - 40
+    local w = (gfx.getFont() or gfx.getSystemFont()):getTextWidth(text)
+    gfx.drawText(text, rightX - w, y)
+end
+
 local function drawSettings()
     local sw = playdate.display.getWidth()
     gfx.setColor(gfx.kColorBlack)
 
     -- Header with underline
     gfx.setFont(Fonts.h1)
-    gfx.drawText("Settings", 40, 16)
+    gfx.drawText("Settings", 20, 8)
     gfx.setFont(Fonts.body)
-    gfx.drawLine(40, 42, sw - 40, 42)
+    gfx.drawLine(20, 34, sw - 20, 34)
 
-    -- Value rows (1-3), evenly spaced
-    local rowY = { 65, 100, 135 }
-    local mark
+    local labelX = 54
+    local rowY = { 55, 90, 125 }
 
-    mark = (settingsCursor == 1) and "> " or "  "
-    gfx.drawText(mark .. "Board size (dots):", 40, rowY[1])
-    gfx.drawText(string.format("<  %d  >", settings.numDots), 280, rowY[1])
+    if settingsCursor == 1 then drawSettingsCursor(rowY[1]) end
+    gfx.drawText("Board size (dots)", labelX, rowY[1])
+    drawSettingsValue(string.format("<  %d  >", settings.numDots), rowY[1])
 
-    mark = (settingsCursor == 2) and "> " or "  "
-    gfx.drawText(mark .. "Difficulty:", 40, rowY[2])
-    gfx.drawText(string.format("<  %s  >", settings.difficulty), 280, rowY[2])
+    if settingsCursor == 2 then drawSettingsCursor(rowY[2]) end
+    gfx.drawText("Difficulty", labelX, rowY[2])
+    drawSettingsValue(string.format("<  %s  >", settings.difficulty), rowY[2])
 
-    mark = (settingsCursor == 3) and "> " or "  "
-    gfx.drawText(mark .. "First player:", 40, rowY[3])
-    gfx.drawText(string.format("<  %s  >", firstPlayerDisplay()), 280, rowY[3])
+    if settingsCursor == 3 then drawSettingsCursor(rowY[3]) end
+    gfx.drawText("First player", labelX, rowY[3])
+    drawSettingsValue(string.format("<  %s  >", firstPlayerDisplay()), rowY[3])
 
     -- Divider above the destructive action
     gfx.setDitherPattern(0.5)
-    gfx.drawLine(40, 168, sw - 40, 168)
+    gfx.drawLine(20, 162, sw - 20, 162)
     gfx.setDitherPattern(0)
 
-    mark = (settingsCursor == SETTINGS_ROW_RESET) and "> " or "  "
-    gfx.drawText(mark .. "Reset all stats & badges", 40, 180)
+    if settingsCursor == SETTINGS_ROW_RESET then drawSettingsCursor(177) end
+    gfx.drawText("Reset all stats and goals", labelX, 177)
 
     gfx.setFont(Fonts.caption)
-    gfx.drawText("A: select   B: back", 40, 220)
+    local footer = (settingsCursor == SETTINGS_ROW_RESET)
+        and "A: reset   B: back"
+        or "Left/Right: change   B: back"
+    gfx.drawText(footer, 20, 218)
     gfx.setFont(Fonts.body)
 end
 
@@ -304,10 +319,6 @@ local function handleSettingsInput()
     if playdate.buttonJustPressed(playdate.kButtonA) then
         if settingsCursor == SETTINGS_ROW_RESET then
             appState = "statsResetConfirm"
-        else
-            -- Rows 1-3: save and return to main menu.
-            playdate.datastore.write(settings, "settings")
-            returnToMainMenu()
         end
     elseif playdate.buttonJustPressed(playdate.kButtonB) then
         playdate.datastore.write(settings, "settings")
