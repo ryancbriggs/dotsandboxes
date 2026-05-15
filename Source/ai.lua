@@ -185,6 +185,37 @@ end
 -- the top of each synchronous Ai.chooseMove call.
 local solveMemo = {}
 
+-- Single source of truth for the value, to the player who OPENS one
+-- component of `len` boxes, of that choice. `nextVal` is the solveComponents
+-- value of the state with this component removed (perspective: whoever moves
+-- next there). The opponent consumes optimally, picking the option that
+-- minimises the opener's value:
+--   greedy:       opp takes all `len`, becomes mover of the rest
+--                   -> -len - nextVal
+--   double-cross: opp leaves a 2-domino (chain) / 4-loop (loop), handing
+--                 control back to the opener
+--                   -> -(len-4) + nextVal   (chain, geometrically len>=2)
+--                   -> -(len-8) + nextVal   (loop,  geometrically len>=4)
+--
+-- IMPORTANT: this arithmetic is mirrored verbatim by the C kernel in
+-- Source/main.c (solve()), which is the fast path used via dotsai.solve.
+-- Keep the two in lockstep — any change here must be made there too.
+local function componentOpenValue(len, isLoop, nextVal)
+    local worst = -len - nextVal
+    if isLoop then
+        if len >= 4 then
+            local keep = -(len - 8) + nextVal
+            if keep < worst then worst = keep end
+        end
+    else
+        if len >= 2 then
+            local keep = -(len - 4) + nextVal
+            if keep < worst then worst = keep end
+        end
+    end
+    return worst
+end
+
 -- Mutate-and-restore inside `state` rather than allocating a new table per
 -- branch. We snapshot the bucket keys up front because modifying a Lua table
 -- while iterating with pairs() is undefined when keys are added/removed.
@@ -212,11 +243,7 @@ local function solveComponents(state)
             local nextVal = solveComponents(state)
             chains[len] = count
 
-            local worst = -len - nextVal
-            if len >= 2 then
-                local keep = -(len - 4) + nextVal
-                if keep < worst then worst = keep end
-            end
+            local worst = componentOpenValue(len, false, nextVal)
             if worst > best then best = worst end
         end
     end
@@ -231,11 +258,7 @@ local function solveComponents(state)
             local nextVal = solveComponents(state)
             loops[len] = count
 
-            local worst = -len - nextVal
-            if len >= 4 then
-                local keep = -(len - 8) + nextVal
-                if keep < worst then worst = keep end
-            end
+            local worst = componentOpenValue(len, true, nextVal)
             if worst > best then best = worst end
         end
     end
@@ -243,6 +266,25 @@ local function solveComponents(state)
     if best == -math.huge then best = 0 end
     solveMemo[key] = best
     return best
+end
+
+-- Compute the endgame future-value either via the C kernel (`dotsai.solve`)
+-- when it's been loaded by the C extension, or the Lua `solveComponents`
+-- fallback. The C path is ~10x faster on device for the mid-late game hot
+-- band; Lua remains as a no-build-deps fallback. Defined here (above the
+-- Endgame solvers) so berlekampSolver can take the fast path too.
+local function endgameFuture(comps)
+    if dotsai and dotsai.solve then
+        local chains, loops = {}, {}
+        for _, comp in ipairs(comps) do
+            if comp.isLoop then loops[#loops + 1] = comp.len
+            else                chains[#chains + 1] = comp.len end
+        end
+        local chainStr = (#chains > 0) and string.char(table.unpack(chains)) or ""
+        local loopStr  = (#loops  > 0) and string.char(table.unpack(loops))  or ""
+        return dotsai.solve(chainStr, loopStr)
+    end
+    return solveComponents(componentState(comps))
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -367,27 +409,17 @@ function Endgame.berlekampSolver(board, snapshot)
         return snapshot.free[math.random(#snapshot.free)]
     end
 
-    local state = componentState(comps)
     local bestScore, bestEdges = -math.huge, {}
 
-    for _, comp in ipairs(comps) do
-        local bucket = comp.isLoop and state.loops or state.chains
-        local prev = bucket[comp.len]
-        if prev == 1 then bucket[comp.len] = nil else bucket[comp.len] = prev - 1 end
-        local nextVal = solveComponents(state)
-        bucket[comp.len] = prev
-        local worst = -comp.len - nextVal
-        if comp.isLoop then
-            if comp.len >= 6 then
-                local keep = -(comp.len - 8) + nextVal
-                if keep < worst then worst = keep end
-            end
-        else
-            if comp.len >= 4 then
-                local keep = -(comp.len - 4) + nextVal
-                if keep < worst then worst = keep end
-            end
+    for i, comp in ipairs(comps) do
+        -- Future value of the state with this one component opened/removed,
+        -- via the C kernel when available (fast path), else Lua fallback.
+        local rest = {}
+        for j, c in ipairs(comps) do
+            if j ~= i then rest[#rest + 1] = c end
         end
+        local nextVal = endgameFuture(rest)
+        local worst = componentOpenValue(comp.len, comp.isLoop, nextVal)
 
         if worst > bestScore then
             bestScore, bestEdges = worst, { comp.edge }
@@ -422,24 +454,6 @@ local Expert = {}
 local function scoreDiff(board)
     local p = board.currentPlayer
     return board.score[p] - board.score[3 - p]
-end
-
--- Compute the endgame future-value either via the C kernel (`dotsai.solve`)
--- when it's been loaded by the C extension, or the Lua `solveComponents`
--- fallback. The C path is ~10x faster on device for the mid-late game hot
--- band; Lua remains as a no-build-deps fallback.
-local function endgameFuture(comps)
-    if dotsai and dotsai.solve then
-        local chains, loops = {}, {}
-        for _, comp in ipairs(comps) do
-            if comp.isLoop then loops[#loops + 1] = comp.len
-            else                chains[#chains + 1] = comp.len end
-        end
-        local chainStr = (#chains > 0) and string.char(table.unpack(chains)) or ""
-        local loopStr  = (#loops  > 0) and string.char(table.unpack(loops))  or ""
-        return dotsai.solve(chainStr, loopStr)
-    end
-    return solveComponents(componentState(comps))
 end
 
 local function applyMove(board, edge)
@@ -678,8 +692,12 @@ function Expert.chooseMove(board, snapshot)
 
     if #snapshot.closers > 0 then
         local bestEdge, bestScore = nil, -math.huge
+        -- [AI DX] diagnostic logging — disabled but kept for future debugging.
+        -- Re-enable by uncommenting this line and the print block below; the
+        -- per-iteration `if closerLog/dxLog` appends are dormant no-ops while
+        -- these stay nil.
         local closerLog, dxLog
-        if Ai.debugLogging then closerLog, dxLog = {}, {} end
+        -- if Ai.debugLogging then closerLog, dxLog = {}, {} end
 
         -- 1) Greedy chain continuation: take a closer.
         local candidates = snapshot.closers
@@ -738,14 +756,15 @@ function Expert.chooseMove(board, snapshot)
             end
         end
 
-        if Ai.debugLogging and dxLog and #dxLog > 0 then
-            local hotLen = select(1, findHotComponent(board))
-            print(string.format(
-                "[AI DX] hot=%d pick=%s score=%s closers=[%s] dx=[%s]",
-                hotLen, tostring(bestEdge), tostring(bestScore),
-                table.concat(closerLog, ","), table.concat(dxLog, ",")
-            ))
-        end
+        -- [AI DX] diagnostic print — disabled, kept for future debugging.
+        -- if Ai.debugLogging and dxLog and #dxLog > 0 then
+        --     local hotLen = select(1, findHotComponent(board))
+        --     print(string.format(
+        --         "[AI DX] hot=%d pick=%s score=%s closers=[%s] dx=[%s]",
+        --         hotLen, tostring(bestEdge), tostring(bestScore),
+        --         table.concat(closerLog, ","), table.concat(dxLog, ",")
+        --     ))
+        -- end
 
         return bestEdge
     end
