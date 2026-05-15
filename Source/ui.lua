@@ -304,16 +304,17 @@ function UI:draw()
         local timeLine = string.format("Time: %d:%02d",
             math.floor(secs / 60), secs % 60)
 
-        -- Each line carries its own font so the panel has real hierarchy.
+        -- Each line: { text, font, chip? }. `chip` rows render as an inverted
+        -- pill (the unlocked-goal toast).
         local lines = {}
 
         if self.newBadges and #self.newBadges > 0 then
             local cap = math.min(3, #self.newBadges)
             for i = 1, cap do
-                lines[#lines + 1] = { "Goal: " .. self.newBadges[i].goal, fC }
+                lines[#lines + 1] = { self.newBadges[i].goal, fC, chip = true }
             end
             if #self.newBadges > cap then
-                lines[#lines + 1] = { "+" .. (#self.newBadges - cap) .. " more", fC }
+                lines[#lines + 1] = { "+" .. (#self.newBadges - cap) .. " more", fC, chip = true }
             end
         end
 
@@ -327,32 +328,60 @@ function UI:draw()
         local rowH = {}
         for i, l in ipairs(lines) do
             local font = l[2]
-            local w = font:getTextWidth(l[1])
+            local w = font:getTextWidth(l[1]) + (l.chip and 20 or 0)
             if w > maxW then maxW = w end
-            rowH[i] = font:getHeight() + 4
+            rowH[i] = font:getHeight() + (l.chip and 8 or 4)
             totalH = totalH + rowH[i]
         end
 
         local panelW = maxW + 28
         local panelH = totalH + 16
         local sw, sh = playdate.display.getSize()
-        local px = math.floor((sw - panelW) / 2)
-        local py = math.floor((sh - panelH) / 2)
+        local cx, cy = sw / 2, sh / 2
 
-        -- Soft drop shadow, then the panel.
+        -- Animate-in: a quick eased pop anchored on the game-over instant.
+        -- Saturates at t=1 so the panel is static for the rest of the screen.
+        local now = playdate.getCurrentTimeMilliseconds()
+        local t = (now - (self.board.endMs or now)) / 220
+        if t < 0 then t = 0 elseif t > 1 then t = 1 end
+        -- easeOutBack for a touch of overshoot.
+        local b1, b3 = 1.70158, 2.70158
+        local tm = t - 1
+        local e = 1 + b3 * tm * tm * tm + b1 * tm * tm
+        local scale = 0.6 + 0.4 * e
+
+        local pw, ph = panelW * scale, panelH * scale
+        local px = math.floor(cx - pw / 2)
+        local py = math.floor(cy - ph / 2)
+
+        -- Soft drop shadow, then the panel, at the animated size.
         gfx.setColor(gfx.kColorBlack); gfx.setDitherPattern(0.5)
-        gfx.fillRect(px + 4, py + 5, panelW, panelH)
+        gfx.fillRect(px + 4, py + 5, pw, ph)
         gfx.setDitherPattern(0)
-        gfx.setColor(gfx.kColorWhite); gfx.fillRect(px, py, panelW, panelH)
-        gfx.setColor(gfx.kColorBlack); gfx.drawRect(px, py, panelW, panelH)
+        gfx.setColor(gfx.kColorWhite); gfx.fillRect(px, py, pw, ph)
+        gfx.setColor(gfx.kColorBlack); gfx.drawRect(px, py, pw, ph)
 
-        local y = py + 8
+        -- Content is drawn at full size but clipped to the growing panel, so
+        -- it's revealed from the centre outward as the box pops open.
+        gfx.setClipRect(px, py, pw, ph)
+        local y = math.floor(cy - panelH / 2) + 8
         for i, l in ipairs(lines) do
             gfx.setFont(l[2])
-            local w = l[2]:getTextWidth(l[1])
-            gfx.drawText(l[1], px + math.floor((panelW - w) / 2), y)
+            local tw = l[2]:getTextWidth(l[1])
+            local tx = math.floor(cx - tw / 2)
+            if l.chip then
+                local cw, ch = tw + 18, rowH[i] - 2
+                gfx.setColor(gfx.kColorBlack)
+                gfx.fillRoundRect(math.floor(cx - cw / 2), y - 1, cw, ch, 4)
+                gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+                gfx.drawText(l[1], tx, y + 2)
+                gfx.setImageDrawMode(gfx.kDrawModeCopy)
+            else
+                gfx.drawText(l[1], tx, y)
+            end
             y = y + rowH[i]
         end
+        gfx.clearClipRect()
         gfx.setFont(fBody)
     end
 end
