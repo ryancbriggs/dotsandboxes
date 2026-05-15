@@ -24,4 +24,8 @@ local Fonts = {
     caption = load("/System/Fonts/Roobert-10-Bold"),
 }
 
+-- Large Roobert for the menu wordmark, bundled so it's available regardless
+-- of which Roobert sizes the device ships under /System/Fonts.
+Fonts.title = load("fonts/Roobert-24-Medium")
+
 return Fonts

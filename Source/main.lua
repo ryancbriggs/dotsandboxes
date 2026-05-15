@@ -101,6 +101,7 @@ local selectedOption = 1
 local settingsCursor = 1             -- 1 = board size, 2 = difficulty, 3 = first player
 local ui             = nil
 local menuSelAnim    = nil           -- eased menu selection rect (see drawMenu)
+local menuIntroMs    = nil           -- set once on the first menu paint after launch
 
 -- ---------------------------------------------------------------------------
 -- Coroutine-driven AI tick (called each frame during gameplay) -------------
@@ -633,13 +634,78 @@ end
 -- ---------------------------------------------------------------------------
 -- HOME MENU ----------------------------------------------------------------
 -- ---------------------------------------------------------------------------
--- Centered wordmark title using the h1 face, drawn at vertical center `cy`.
+-- Title wordmark, framed as a "claimed box" (the game's core motif). On menu
+-- entry it draws itself once: corner dots pop, the four edges draw clockwise,
+-- then the wordmark wipes in — literally claiming the box that is the logo.
+local TITLE_DOT_MS  <const> = 160          -- dots pop-in
+local TITLE_EDGE_MS <const> = 120          -- per edge (4, clockwise)
+local TITLE_POP_MS  <const> = 260          -- wordmark pop-in
+
+local function clamp01(v) return v < 0 and 0 or (v > 1 and 1 or v) end
+
+-- Overshoot ease: 0 → past 1 → settles at 1 (the box-claim "pop").
+local function easeOutBack(p)
+    local s = 1.70158
+    local t = p - 1
+    return t * t * ((s + 1) * t + s) + 1
+end
+
+local titleImg = nil  -- cached render of the wordmark (built once, lazily)
+
 local function drawTitle(text, cy)
     local sw = playdate.display.getWidth()
-    local f  = Fonts.h1
+    local f  = Fonts.title or Fonts.h1
     gfx.setFont(f)
-    local w = f:getTextWidth(text)
-    gfx.drawText(text, math.floor((sw - w) / 2), math.floor(cy - f:getHeight() / 2))
+
+    local tw, th = f:getTextWidth(text), f:getHeight()
+    if not titleImg then
+        titleImg = gfx.image.new(tw, th)
+        gfx.pushContext(titleImg)
+        gfx.setFont(f)
+        gfx.drawText(text, 0, 0)
+        gfx.popContext()
+    end
+
+    local PADX, PADY = 18, 6
+    local bw, bh = tw + 2 * PADX, th + 2 * PADY
+    local bx = math.floor((sw - bw) / 2)
+    local by = math.floor(cy - bh / 2)
+    local x2, y2 = bx + bw, by + bh
+    local cx     = sw / 2
+
+    local e = menuIntroMs and (playdate.getCurrentTimeMilliseconds() - menuIntroMs) or 1e9
+    if e < 0 then e = 0 end
+
+    -- 1. Corner dots pop in.
+    local r = math.floor(4 * clamp01(e / TITLE_DOT_MS) + 0.5)
+    if r > 0 then
+        gfx.setColor(gfx.kColorBlack)
+        for _, c in ipairs({ {bx,by}, {x2,by}, {x2,y2}, {bx,y2} }) do
+            gfx.fillCircleAtPoint(c[1], c[2], r)
+        end
+    end
+
+    -- 2. Edges connect sequentially, clockwise from the top-left.
+    local corners = { {bx,by}, {x2,by}, {x2,y2}, {bx,y2} }
+    gfx.setLineWidth(3)
+    for i = 1, 4 do
+        local p = clamp01((e - TITLE_DOT_MS - (i - 1) * TITLE_EDGE_MS) / TITLE_EDGE_MS)
+        if p > 0 then
+            local a = corners[i]
+            local b = corners[i % 4 + 1]
+            gfx.drawLine(a[1], a[2],
+                         a[1] + (b[1] - a[1]) * p,
+                         a[2] + (b[2] - a[2]) * p)
+        end
+    end
+
+    -- 3. Once the box is closed, the wordmark pops in (scale overshoot).
+    local popStart = TITLE_DOT_MS + 4 * TITLE_EDGE_MS
+    local pp = clamp01((e - popStart) / TITLE_POP_MS)
+    if pp > 0 then
+        local scale = easeOutBack(pp)
+        titleImg:drawScaled(cx - tw * scale / 2, cy - th * scale / 2, scale)
+    end
 end
 
 -- Menu icons --------------------------------------------------------------
@@ -763,8 +829,13 @@ local function drawMenu()
     local sw = playdate.display.getWidth()
     gfx.setColor(gfx.kColorBlack)
 
+    -- Play the title intro on the very first menu paint after launch too.
+    if not menuIntroMs then
+        menuIntroMs = playdate.getCurrentTimeMilliseconds()
+    end
+
     -- 1. Wordmark title across the top, centered.
-    drawTitle("DOTS AND BOXES", 38)
+    drawTitle("Dots and Boxes", 38)
 
     -- 2. Menu items, drawn in a 2x2 grid using the larger label font
     gfx.setFont(labelFont)
