@@ -76,10 +76,27 @@ function UI:drawCursor()
     end
 
     local pad = 8
-    local left   = math.min(x1, x2) - pad
-    local top    = math.min(y1, y2) - pad
-    local width  = math.abs(x2 - x1) + pad * 2
-    local height = math.abs(y2 - y1) + pad * 2
+    local tx = math.min(x1, x2) - pad
+    local ty = math.min(y1, y2) - pad
+    local tw = math.abs(x2 - x1) + pad * 2
+    local th = math.abs(y2 - y1) + pad * 2
+
+    -- Glide toward the target edge, then snap — identical feel to the main
+    -- menu's selection rect (same k and sub-pixel snap).
+    if not self.cursorAnim then
+        self.cursorAnim = { x = tx, y = ty, w = tw, h = th }
+    else
+        local s, k = self.cursorAnim, 0.65
+        s.x = s.x + (tx - s.x) * k
+        s.y = s.y + (ty - s.y) * k
+        s.w = s.w + (tw - s.w) * k
+        s.h = s.h + (th - s.h) * k
+        if math.abs(s.x - tx) < 1 then s.x = tx end
+        if math.abs(s.y - ty) < 1 then s.y = ty end
+        if math.abs(s.w - tw) < 1 then s.w = tw end
+        if math.abs(s.h - th) < 1 then s.h = th end
+    end
+    local s = self.cursorAnim
 
     if self.board.currentPlayer == 1 then
         gfx.setColor(gfx.kColorBlack)
@@ -87,7 +104,8 @@ function UI:drawCursor()
         gfx.setDitherPattern(0.5)
     end
     gfx.setLineWidth(3)
-    gfx.drawRect(left, top, width, height)
+    gfx.drawRect(math.floor(s.x), math.floor(s.y),
+                 math.floor(s.w), math.floor(s.h))
     gfx.setColor(gfx.kColorBlack)
     gfx.setDitherPattern(0)
 end
@@ -121,6 +139,7 @@ function UI.new(board, opts)
 
     -- Cursor
     self.cursorEdge = 1
+    self.cursorAnim = nil   -- eased highlight rect; snaps fresh each game
     -- Per-box claim-animation start times (boxId -> ms timestamp)
     self.boxAnimStart = {}
     playdate.display.setRefreshRate(20)

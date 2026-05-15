@@ -807,7 +807,7 @@ local function drawMenu()
             menuSelAnim = { x = tx, y = ty, w = tw, h = th }
         else
             local s = menuSelAnim
-            local k = 0.45                       -- ~3-frame ease at 20fps
+            local k = 0.65                       -- snappy ease at 20fps
             s.x = s.x + (tx - s.x) * k
             s.y = s.y + (ty - s.y) * k
             s.w = s.w + (tw - s.w) * k
