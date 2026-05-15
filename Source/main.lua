@@ -44,7 +44,7 @@ local DEFAULT_SETTINGS = {
     firstPlayer = "random"
 }
 local settings = playdate.datastore.read("settings") or {}
-settings.numDots = math.min(8, math.max(3, settings.numDots or DEFAULT_SETTINGS.numDots))
+settings.numDots = math.min(8, math.max(4, settings.numDots or DEFAULT_SETTINGS.numDots))
 
 -- validate difficulty string -----------------------------------------------
 local difficulties = { "easy", "medium", "hard", "expert" }
@@ -261,7 +261,7 @@ local function handleSettingsInput()
     -- Value-cycling rows (1-3) react to Left/Right.
     if playdate.buttonJustPressed(playdate.kButtonLeft) then
         if settingsCursor == 1 then
-            settings.numDots = math.max(3, settings.numDots - 1)
+            settings.numDots = math.max(4, settings.numDots - 1)
         elseif settingsCursor == 2 then
             local idx = difficultyIndex() - 1
             if idx < 1 then idx = #difficulties end

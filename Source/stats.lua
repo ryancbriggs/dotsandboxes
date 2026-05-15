@@ -9,7 +9,7 @@ Stats.allBadges = Badges.list   -- exposed so callers don't need to re-import "b
 
 local CURRENT_VERSION <const> = 1
 local DIFFICULTIES    <const> = { "easy", "medium", "hard", "expert" }
-local MIN_DOTS        <const> = 3
+local MIN_DOTS        <const> = 4
 local MAX_DOTS        <const> = 8
 
 local function defaults()
