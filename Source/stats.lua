@@ -2,7 +2,8 @@
 -- Stored via playdate.datastore under the key "stats". Versioned so future
 -- schema changes can migrate forward without nuking saves.
 
-local Badges = import "badges"
+local Badges       = import "badges"
+local Achievements = import "achievements"
 
 local Stats = {}
 Stats.allBadges = Badges.list   -- exposed so callers don't need to re-import "badges"
@@ -82,6 +83,9 @@ end
 
 function Stats.load()
     Stats.data = migrate(playdate.datastore.read("stats"))
+    -- Backfill the /Shared Playdate Achievements file for existing players
+    -- (grants any already-earned badges, refreshes progress) on every boot.
+    Achievements.sync(Stats.data)
 end
 
 function Stats.save()
@@ -91,6 +95,7 @@ end
 function Stats.reset()
     Stats.data = defaults()
     Stats.save()
+    Achievements.reset()   -- also clear the /Shared Trophy Case mirror
 end
 
 -- Record a finished game and evaluate badge unlocks.
@@ -201,13 +206,19 @@ function Stats.recordGame(board, opts)
         if not Stats.data.badges[b.id] then
             local ok, earned = pcall(b.predicate, Stats.data, ctx)
             if ok and earned then
-                Stats.data.badges[b.id] = true
+                -- Store the real earn-time (secs since 2000-01-01 UTC) rather
+                -- than a bare `true`, so grantedAt is accurate going forward
+                -- and survives even if the /Shared mirror is deleted. Legacy
+                -- saves may still hold `true` (unknown time) — handled in
+                -- Achievements.sync.
+                Stats.data.badges[b.id] = playdate.getSecondsSinceEpoch()
                 newlyEarned[#newlyEarned + 1] = b
             end
         end
     end
 
     Stats.save()
+    Achievements.sync(Stats.data)
     return newlyEarned
 end
 

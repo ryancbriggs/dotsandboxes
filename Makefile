@@ -1,13 +1,13 @@
 # Makefile for the Dots & Boxes Playdate game.
 #
 # Drives the C extension build + bundles the .pdx via the SDK's common.mk.
-# Run `make` to produce build/Dots.pdx (simulator + device binaries).
+# Run `make` to produce "Dots and Boxes.pdx" (simulator + device binaries).
 # `make clean` removes build artifacts.
 
 HEAP_SIZE      = 8388208
 STACK_SIZE     = 61800
 
-PRODUCT = Dots.pdx
+PRODUCT = Dots\ and\ Boxes.pdx
 
 # Locate the SDK from env, falling back to the user's ~/.Playdate/config.
 SDK = ${PLAYDATE_SDK_PATH}
@@ -30,6 +30,15 @@ ifeq ($(findstring PARITY_OK,$(PARITY_OUT)),)
 $(error C/Lua parity test FAILED — build aborted:$(PARITY_OUT))
 endif
 $(info [parity] $(PARITY_OUT))
+
+# ── Build-time Playdate Achievements alignment gate ────────────────────────
+# Pins Source/achievements.json to the vendored pd-achievements v1.0.0 schema
+# AND to the badge id set in Source/badges.lua. Any drift aborts the build.
+ACH_OUT := $(shell python3 tests/achievements_test.py 2>&1)
+ifeq ($(findstring ACHIEVEMENTS_OK,$(ACH_OUT)),)
+$(error Playdate Achievements alignment test FAILED — build aborted:$(ACH_OUT))
+endif
+$(info [achievements] $(ACH_OUT))
 endif
 
 # C source files live in Source/ alongside the .lua game code so pdc picks
@@ -50,3 +59,7 @@ include $(SDK)/C_API/buildsupport/common.mk
 
 # Don't bundle main.c (or any other "unknown" file types) into the .pdx.
 PDCFLAGS += -k
+
+.PHONY: dist
+dist: all
+	@echo "[dist] 'Dots and Boxes.pdx' ready — open it in the Simulator, then Upload to Device"

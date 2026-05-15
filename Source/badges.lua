@@ -59,6 +59,10 @@ Badges.list = {
       predicate = function(s, ctx)
           return ctx.humanWon and ctx.durationSecs < 60 and ctx.boardSize >= 5
       end },
+    { id = "endurance", goal = "Win a game lasting over 5 minutes",
+      predicate = function(s, ctx)
+          return ctx.humanWon and ctx.durationSecs >= 300
+      end },
     { id = "perfect_loop", goal = "Claim a chain of 8 or more boxes in one turn",
       predicate = function(s, ctx)
           return ctx.longestHumanChain >= 8
@@ -69,9 +73,9 @@ Badges.list = {
       predicate = function(s, ctx)
           return ctx.humanWon and ctx.aiScore == 0
       end },
-    { id = "perfectionist", goal = "Beat Expert without conceding a box",
+    { id = "big_sweep", goal = "Claim 20 or more boxes in a single game",
       predicate = function(s, ctx)
-          return ctx.humanWon and ctx.aiScore == 0 and ctx.difficulty == "expert"
+          return ctx.humanScore >= 20
       end },
     { id = "double_up", goal = "Win with at least double the AI's score",
       predicate = function(s, ctx)
@@ -123,6 +127,10 @@ Badges.list = {
       end },
 
     -- ── Streaks ───────────────────────────────────────────────────────────
+    { id = "iron_will", goal = "Win 3 Expert games in a row",
+      predicate = function(s, ctx)
+          return diffs(s).expert.bestStreak >= 3
+      end },
     { id = "on_fire", goal = "Win 5 Expert games in a row",
       predicate = function(s, ctx)
           return diffs(s).expert.bestStreak >= 5
