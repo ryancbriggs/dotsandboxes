@@ -20,8 +20,7 @@ end
 
 local DIFFICULTIES <const> = { "easy", "medium", "hard", "expert" }
 
--- 42.195 km marathon → 42.195 minutes of play.
-local MARATHON_SECS <const> = math.floor(42.195 * 60)
+local HOUR_SECS <const> = 60 * 60
 
 Badges.list = {
     -- ── Long-haul ─────────────────────────────────────────────────────────
@@ -29,8 +28,8 @@ Badges.list = {
       predicate = function(s, ctx) return totals(s).boxesClaimed >= 1000 end },
     { id = "games_100",  goal = "Play 100 games",
       predicate = function(s, ctx) return totals(s).gamesPlayed >= 100 end },
-    { id = "marathon",   goal = "Play for over 42 minutes in total",
-      predicate = function(s, ctx) return totals(s).secondsPlayed >= MARATHON_SECS end },
+    { id = "marathon",   goal = "Play for over 1 hour",
+      predicate = function(s, ctx) return totals(s).secondsPlayed >= HOUR_SECS end },
 
     -- ── Beat each difficulty ──────────────────────────────────────────────
     { id = "beat_easy",   goal = "Win a game on Easy",
@@ -137,7 +136,7 @@ Badges.list = {
       end },
 
     -- ── Collection capstones ──────────────────────────────────────────────
-    { id = "survey_course", goal = "Win on every board size (4 through 8)",
+    { id = "survey_course", goal = "Win on every board size",
       predicate = function(s, ctx)
           for d = 4, 8 do
               if not s.bySize[d] or s.bySize[d].wins < 1 then return false end

@@ -100,6 +100,7 @@ local menuOptions    = { "1 Player", "2 Player", "Career", "Settings" }
 local selectedOption = 1
 local settingsCursor = 1             -- 1 = board size, 2 = difficulty, 3 = first player
 local ui             = nil
+local menuSelAnim    = nil           -- eased menu selection rect (see drawMenu)
 
 -- ---------------------------------------------------------------------------
 -- Coroutine-driven AI tick (called each frame during gameplay) -------------
@@ -165,6 +166,7 @@ local function returnToMainMenu()
     appState       = "menu"
     ui             = nil
     selectedOption = 1
+    menuSelAnim    = nil   -- snap the selection rect fresh on menu entry
 end
 playdate.getSystemMenu():addMenuItem("Main Menu", returnToMainMenu)
 playdate.getSystemMenu():addCheckmarkMenuItem("Debug logs", false, function(value)
@@ -476,6 +478,18 @@ local function drawBadgesTab()
         local last  = badgeScroll + shown
         local label = string.format("%d-%d of %d", first, last, total)
         gfx.drawText(label, sw - 20 - f:getTextWidth(label), STATS_FOOTER_Y)
+
+        -- Slim scrollbar on the right edge of the content area.
+        local trackX = sw - 12
+        local trackY = STATS_CONTENT_TOP
+        local trackH = bottomLimit - STATS_CONTENT_TOP
+        gfx.setColor(gfx.kColorBlack); gfx.setDitherPattern(0.6)
+        gfx.fillRect(trackX, trackY, 4, trackH)
+        gfx.setDitherPattern(0)
+        local thumbH = math.max(16, math.floor(trackH * shown / total))
+        local frac   = (maxScroll > 0) and (badgeScroll / maxScroll) or 0
+        local thumbY = trackY + math.floor((trackH - thumbH) * frac)
+        gfx.fillRoundRect(trackX, thumbY, 4, thumbH, 2)
     end
 end
 
@@ -568,32 +582,40 @@ end
 -- STATS RESET CONFIRM ------------------------------------------------------
 -- ---------------------------------------------------------------------------
 local function drawStatsResetConfirm()
+    -- Same visual language as the game-over panel: shadow + type hierarchy.
     local lines = {
-        "Reset all stats and badges?",
-        "This cannot be undone.",
-        "",
-        "A = Reset    B = Cancel",
+        { "Reset all stats and goals?", Fonts.h2 },
+        { "This cannot be undone.",     Fonts.body },
+        { "",                           Fonts.body },
+        { "A = Reset    B = Cancel",    Fonts.caption },
     }
-    local f = Fonts.body
-    local lineH = f:getHeight() + 6
     local sw, sh = playdate.display.getSize()
-    local totalH = #lines * lineH
-    local panelW = 0
-    for _, l in ipairs(lines) do
-        local w = f:getTextWidth(l)
-        if w > panelW then panelW = w end
+    local maxW, totalH, rowH = 0, 0, {}
+    for i, l in ipairs(lines) do
+        local w = l[2]:getTextWidth(l[1])
+        if w > maxW then maxW = w end
+        rowH[i] = l[2]:getHeight() + 6
+        totalH = totalH + rowH[i]
     end
-    panelW = panelW + 40
+    local panelW = maxW + 40
     local panelH = totalH + 20
     local px = math.floor((sw - panelW) / 2)
     local py = math.floor((sh - panelH) / 2)
 
+    gfx.setColor(gfx.kColorBlack); gfx.setDitherPattern(0.5)
+    gfx.fillRect(px + 4, py + 5, panelW, panelH)
+    gfx.setDitherPattern(0)
     gfx.setColor(gfx.kColorWhite); gfx.fillRect(px, py, panelW, panelH)
     gfx.setColor(gfx.kColorBlack); gfx.drawRect(px, py, panelW, panelH)
+
+    local y = py + 10
     for i, l in ipairs(lines) do
-        local w = f:getTextWidth(l)
-        gfx.drawText(l, math.floor((sw - w) / 2), py + 10 + (i - 1) * lineH)
+        gfx.setFont(l[2])
+        local w = l[2]:getTextWidth(l[1])
+        gfx.drawText(l[1], math.floor((sw - w) / 2), y)
+        y = y + rowH[i]
     end
+    gfx.setFont(Fonts.body)
 end
 
 local function handleStatsResetConfirmInput()
@@ -769,19 +791,38 @@ local function drawMenu()
         gfx.drawText(label, x, y)
     end
 
-    -- 3. Selection rect
+    -- 3. Selection rect — eases toward the selected cell instead of snapping.
     do
         local col, row = optionToGrid(selectedOption)
         local y = MENU_ROW_Y[row + 1]
         local label = menuOptions[selectedOption]
         local w = labelFont:getTextWidth(label)
         local padX, padY = 8, 4
-        local left   = MENU_COL_ICON_X[col + 1] - 14 - padX
-        local top    = y - padY
-        local right  = MENU_COL_LBL_X[col + 1] + w + padX
-        local bottom = y + fh + padY
+        local tx = MENU_COL_ICON_X[col + 1] - 14 - padX
+        local ty = y - padY
+        local tw = (MENU_COL_LBL_X[col + 1] + w + padX) - tx
+        local th = (y + fh + padY) - ty
+
+        if not menuSelAnim then
+            menuSelAnim = { x = tx, y = ty, w = tw, h = th }
+        else
+            local s = menuSelAnim
+            local k = 0.45                       -- ~3-frame ease at 20fps
+            s.x = s.x + (tx - s.x) * k
+            s.y = s.y + (ty - s.y) * k
+            s.w = s.w + (tw - s.w) * k
+            s.h = s.h + (th - s.h) * k
+            -- Snap once within a pixel to kill sub-pixel shimmer.
+            if math.abs(s.x - tx) < 1 then s.x = tx end
+            if math.abs(s.y - ty) < 1 then s.y = ty end
+            if math.abs(s.w - tw) < 1 then s.w = tw end
+            if math.abs(s.h - th) < 1 then s.h = th end
+        end
+
+        local s = menuSelAnim
         gfx.setDitherPattern(0.5); gfx.setLineWidth(3)
-        gfx.drawRect(left, top, right - left, bottom - top)
+        gfx.drawRect(math.floor(s.x), math.floor(s.y),
+                     math.floor(s.w), math.floor(s.h))
         gfx.setDitherPattern(0); gfx.setLineWidth(1)
     end
 
