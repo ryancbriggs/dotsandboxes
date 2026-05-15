@@ -175,6 +175,7 @@ local function initGame(mode)
         onRestart = function()
             initGame(mode)
         end,
+        onMainMenu = returnToMainMenu,
         sound = sound,
     })
     ui.mode  = mode
@@ -393,38 +394,75 @@ local function drawDifficultyTab()
     end
 end
 
+-- Word-wrap `str` into a list of lines that each render within `maxW` px.
+-- A single word longer than maxW is left intact (won't infinite-loop).
+local function wrapText(f, str, maxW)
+    local lines, line = {}, ""
+    for word in str:gmatch("%S+") do
+        local trial = (line == "") and word or (line .. " " .. word)
+        if f:getTextWidth(trial) <= maxW or line == "" then
+            line = trial
+        else
+            lines[#lines + 1] = line
+            line = word
+        end
+    end
+    if line ~= "" then lines[#lines + 1] = line end
+    return lines
+end
+
 local function drawBadgesTab()
     local f = gfx.getSystemFont()
     local lineH = f:getHeight() + 2
-    local visible = 6
     local total = #Stats.allBadges
+    local sw = playdate.display.getWidth()
+    local x0, xCont = 30, 42                  -- first line / wrapped-continuation x
+    local maxW  = sw - x0    - 20
+    local contW = sw - xCont - 20
+    local bottomLimit = STATS_FOOTER_Y - 6    -- keep blocks clear of the footer
 
-    -- Clamp scroll.
+    -- Clamp scroll. maxScroll = total-1 guarantees the last badge is always
+    -- reachable (it can scroll up to being the sole top entry).
     if badgeScroll < 0 then badgeScroll = 0 end
-    local maxScroll = math.max(0, total - visible)
+    local maxScroll = math.max(0, total - 1)
     if badgeScroll > maxScroll then badgeScroll = maxScroll end
 
     local y = STATS_CONTENT_TOP
-    for i = 1, visible do
-        local idx = badgeScroll + i
+    local idx, shown = badgeScroll, 0
+    while true do
+        idx = idx + 1
         local b = Stats.allBadges[idx]
-        if b then
-            local earned = Stats.data.badges[b.id]
-            local line
-            if earned then
-                line = "* " .. b.label .. " - " .. b.hint
-            else
-                line = "  ??? - " .. b.hint
-            end
-            gfx.drawText(line, 30, y)
+        if not b then break end
+
+        local earned = Stats.data.badges[b.id]
+        local head = earned
+            and (b.label .. " - " .. b.hint)
+            or  ("??? - " .. b.hint)
+
+        -- Wrap using the narrower continuation width so every line fits at
+        -- whichever x it lands on.
+        local lines = wrapText(f, head, contW)
+        local blockH = #lines * lineH
+
+        -- Stop before a block would collide with the footer (but always
+        -- show at least one badge so a tall entry can't blank the page).
+        if shown > 0 and (y + blockH) > bottomLimit then break end
+
+        for li, ln in ipairs(lines) do
+            -- `*...*` is Playdate bold markup; re-apply per wrapped line so
+            -- continuation lines of an earned badge stay bold too.
+            local text = earned and ("*" .. ln .. "*") or ln
+            gfx.drawText(text, (li == 1) and x0 or xCont, y)
             y = y + lineH
         end
+        y = y + 4                              -- gap between badges
+        shown = shown + 1
+        if y > bottomLimit then break end
     end
 
-    if total > visible then
-        local sw = playdate.display.getWidth()
+    if shown < total then
         local first = badgeScroll + 1
-        local last  = math.min(badgeScroll + visible, total)
+        local last  = badgeScroll + shown
         local label = string.format("%d-%d of %d", first, last, total)
         gfx.drawText(label, sw - 20 - f:getTextWidth(label), STATS_FOOTER_Y)
     end
@@ -760,9 +798,13 @@ function playdate.update()
             ui:handleInput()
         end
 
-        recordIfFinished()
-        ui:draw()
-        tickAI()
+        -- handleInput may have torn down the game (B -> main menu), which
+        -- nils `ui` and flips appState. Bail before touching ui again.
+        if ui then
+            recordIfFinished()
+            ui:draw()
+            tickAI()
+        end
     end
 
     -- always process timers & sprites

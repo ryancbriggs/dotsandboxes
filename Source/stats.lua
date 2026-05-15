@@ -172,6 +172,14 @@ function Stats.recordGame(board, opts)
         end
     end
 
+    -- Spatial context for geometric badges: the set of boxIds owned by the
+    -- human-scored side (P1 — consistent with humanScore above). recordGame
+    -- only fires on a finished board, so every box has an owner.
+    local humanBoxes = {}
+    for boxId, owner in pairs(board.boxOwner) do
+        if owner == 1 then humanBoxes[boxId] = true end
+    end
+
     -- Build badge context -----------------------------------------------
     local ctx = {
         mode              = mode,
@@ -184,6 +192,7 @@ function Stats.recordGame(board, opts)
         margin            = margin,
         durationSecs      = durationSecs,
         longestHumanChain = humanChain,
+        humanBoxes        = humanBoxes,
     }
 
     -- Evaluate badges (only those not yet earned) ------------------------

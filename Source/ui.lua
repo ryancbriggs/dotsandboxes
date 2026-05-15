@@ -99,8 +99,9 @@ function UI.new(board, opts)
     local self = setmetatable({}, UI)
     self.board = board
     opts = opts or {}
-    self.onRestart = opts.onRestart
-    self.sound     = opts.sound
+    self.onRestart  = opts.onRestart
+    self.onMainMenu = opts.onMainMenu
+    self.sound      = opts.sound
 
     -- Build box lookup (edge lookup is on the board)
     self:buildBoxToCoord()
@@ -129,8 +130,12 @@ end
 -- Handle input
 -------------------------------------------------------------------------------
 function UI:handleInput()
-    if playdate.buttonJustPressed(playdate.kButtonA) and self.board:isGameOver() then
-        self.onRestart()
+    if self.board:isGameOver() then
+        if playdate.buttonJustPressed(playdate.kButtonA) then
+            self.onRestart()
+        elseif playdate.buttonJustPressed(playdate.kButtonB) and self.onMainMenu then
+            self.onMainMenu()
+        end
         return
     end
 
@@ -314,7 +319,7 @@ function UI:draw()
         lines[#lines + 1] = winnerLine
         lines[#lines + 1] = chainLine
         lines[#lines + 1] = timeLine
-        lines[#lines + 1] = "(A to restart)"
+        lines[#lines + 1] = "(A: play again   B: menu)"
 
         local maxW = 0
         for _, l in ipairs(lines) do

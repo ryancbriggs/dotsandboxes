@@ -3,10 +3,19 @@
 -- `stats` is the persistent Stats.data table AFTER this game has been counted;
 -- `ctx` describes the just-finished game (see Stats.recordGame).
 
+local Geometry = import "geometry"
+
 local Badges = {}
 
 local function totals(s)  return s.totals end
 local function diffs(s)   return s.byDifficulty end
+
+-- Geometric badges must be earned against a real opponent: PvC, and not
+-- Easy (Easy blunders 30% of moves, so you can bait it into handing you
+-- whatever shape you want — that defeats the point of a geometric feat).
+local function geoQualifies(ctx)
+    return ctx.humanWon and ctx.mode == "pvc" and ctx.difficulty ~= "easy"
+end
 
 local DIFFICULTIES <const> = { "easy", "medium", "hard", "expert" }
 
@@ -99,6 +108,18 @@ Badges.list = {
     { id = "boxed_in", label = "Boxed In", hint = "lose without claiming a single box",
       predicate = function(s, ctx)
           return (not ctx.humanWon) and ctx.humanScore == 0
+      end },
+
+    -- ── Geometric ─────────────────────────────────────────────────────────
+    { id = "four_corners", label = "Four Corners", hint = "win owning all four corners vs Medium+",
+      predicate = function(s, ctx)
+          return geoQualifies(ctx)
+             and Geometry.ownsAll(ctx.humanBoxes, Geometry.cornerBoxes(ctx.boardSize))
+      end },
+    { id = "full_stripe", label = "Full Stripe", hint = "win owning a full row or column vs Medium+",
+      predicate = function(s, ctx)
+          return geoQualifies(ctx)
+             and Geometry.hasFullStripe(ctx.humanBoxes, ctx.boardSize)
       end },
 
     -- ── Streaks ───────────────────────────────────────────────────────────
