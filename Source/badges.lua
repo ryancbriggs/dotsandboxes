@@ -1,7 +1,8 @@
--- badges.lua – Badge definitions and predicates.
--- Each badge: { id, label, hint, predicate(stats, ctx) -> bool }.
--- `stats` is the persistent Stats.data table AFTER this game has been counted;
--- `ctx` describes the just-finished game (see Stats.recordGame).
+-- badges.lua – Goal definitions and predicates.
+-- Each goal: { id, goal, predicate(stats, ctx) -> bool }.
+--   `goal`  is a clear, self-contained instruction shown on the Goals tab.
+--   `stats` is the persistent Stats.data table AFTER this game is counted.
+--   `ctx`   describes the just-finished game (see Stats.recordGame).
 
 local Geometry = import "geometry"
 
@@ -10,7 +11,7 @@ local Badges = {}
 local function totals(s)  return s.totals end
 local function diffs(s)   return s.byDifficulty end
 
--- Geometric badges must be earned against a real opponent: PvC, and not
+-- Geometric goals must be earned against a real opponent: PvC, and not
 -- Easy (Easy blunders 30% of moves, so you can bait it into handing you
 -- whatever shape you want — that defeats the point of a geometric feat).
 local function geoQualifies(ctx)
@@ -23,111 +24,111 @@ local DIFFICULTIES <const> = { "easy", "medium", "hard", "expert" }
 local MARATHON_SECS <const> = math.floor(42.195 * 60)
 
 Badges.list = {
-    -- ── Long-haul anchors (the only two grind badges) ─────────────────────
-    { id = "boxes_1000", label = "Thousand Strong", hint = "claim a truly absurd number of boxes",
+    -- ── Long-haul ─────────────────────────────────────────────────────────
+    { id = "boxes_1000", goal = "Claim 1000 boxes in total",
       predicate = function(s, ctx) return totals(s).boxesClaimed >= 1000 end },
-    { id = "games_100",  label = "Centurion",       hint = "play a hundred games",
+    { id = "games_100",  goal = "Play 100 games",
       predicate = function(s, ctx) return totals(s).gamesPlayed >= 100 end },
-    { id = "marathon",   label = "Marathon",        hint = "log 42.195 minutes of play",
+    { id = "marathon",   goal = "Play for over 42 minutes in total",
       predicate = function(s, ctx) return totals(s).secondsPlayed >= MARATHON_SECS end },
 
-    -- ── Beat each difficulty at least once ────────────────────────────────
-    { id = "beat_easy",   label = "Eased In",   hint = "win on the easiest setting",
+    -- ── Beat each difficulty ──────────────────────────────────────────────
+    { id = "beat_easy",   goal = "Win a game on Easy",
       predicate = function(s, ctx) return diffs(s).easy.wins   >= 1 end },
-    { id = "beat_medium", label = "Solid",      hint = "win on medium",
+    { id = "beat_medium", goal = "Win a game on Medium",
       predicate = function(s, ctx) return diffs(s).medium.wins >= 1 end },
-    { id = "beat_hard",   label = "Crafty",     hint = "win on hard",
+    { id = "beat_hard",   goal = "Win a game on Hard",
       predicate = function(s, ctx) return diffs(s).hard.wins   >= 1 end },
-    { id = "beat_expert", label = "Conqueror",  hint = "win on expert",
+    { id = "beat_expert", goal = "Win a game on Expert",
       predicate = function(s, ctx) return diffs(s).expert.wins >= 1 end },
 
     -- ── Quality of win ────────────────────────────────────────────────────
-    { id = "landslide", label = "Landslide", hint = "trounce a strong opponent",
+    { id = "landslide", goal = "Win by 8 or more boxes vs Hard or Expert",
       predicate = function(s, ctx)
           return ctx.humanWon
              and (ctx.difficulty == "hard" or ctx.difficulty == "expert")
              and ctx.margin >= 8
       end },
-    { id = "underdog", label = "Underdog", hint = "go second and still win",
+    { id = "underdog", goal = "Go second and beat Hard or Expert",
       predicate = function(s, ctx)
           return ctx.humanWon
              and ctx.mode == "pvc"
              and ctx.startingPlayer == 2
              and (ctx.difficulty == "hard" or ctx.difficulty == "expert")
       end },
-    { id = "speed_run", label = "Speed Run", hint = "win a 5x5+ board in under a minute",
+    { id = "speed_run", goal = "Win a 5x5 or larger board in under a minute",
       predicate = function(s, ctx)
           return ctx.humanWon and ctx.durationSecs < 60 and ctx.boardSize >= 5
       end },
-    { id = "perfect_loop", label = "Perfect Loop", hint = "claim a long chain in one turn",
+    { id = "perfect_loop", goal = "Claim a chain of 8 or more boxes in one turn",
       predicate = function(s, ctx)
           return ctx.longestHumanChain >= 8
       end },
 
-    -- ── Skill / outcome (no extra tracking) ───────────────────────────────
-    { id = "shutout", label = "Shutout", hint = "win without conceding a single box",
+    -- ── Skill / outcome ───────────────────────────────────────────────────
+    { id = "shutout", goal = "Win without conceding a single box",
       predicate = function(s, ctx)
           return ctx.humanWon and ctx.aiScore == 0
       end },
-    { id = "perfectionist", label = "Perfectionist", hint = "shut out Expert",
+    { id = "perfectionist", goal = "Beat Expert without conceding a box",
       predicate = function(s, ctx)
           return ctx.humanWon and ctx.aiScore == 0 and ctx.difficulty == "expert"
       end },
-    { id = "double_up", label = "Double Up", hint = "win with at least twice the score",
+    { id = "double_up", goal = "Win with at least double the AI's score",
       predicate = function(s, ctx)
           return ctx.humanWon and ctx.humanScore >= 2 * ctx.aiScore
       end },
-    { id = "the_long_game", label = "The Long Game", hint = "claim a chain of 12 in one turn",
+    { id = "the_long_game", goal = "Claim a chain of 12 or more boxes in one turn",
       predicate = function(s, ctx)
           return ctx.longestHumanChain >= 12
       end },
-    { id = "from_the_brink", label = "From the Brink", hint = "win by a single box vs Hard/Expert",
+    { id = "from_the_brink", goal = "Win by exactly 1 box vs Hard or Expert",
       predicate = function(s, ctx)
           return ctx.humanWon
              and ctx.margin == 1
              and (ctx.difficulty == "hard" or ctx.difficulty == "expert")
       end },
-    { id = "giant_slayer", label = "Giant Slayer", hint = "beat Expert on the 8x8 board",
+    { id = "giant_slayer", goal = "Beat Expert on an 8x8 board",
       predicate = function(s, ctx)
           return ctx.humanWon and ctx.difficulty == "expert" and ctx.boardSize == 8
       end },
-    { id = "big_board", label = "Big Board Brawler", hint = "win a game on the 8x8 board",
+    { id = "big_board", goal = "Win a game on an 8x8 board",
       predicate = function(s, ctx)
           return ctx.humanWon and ctx.boardSize == 8
       end },
-    { id = "vengeance", label = "Vengeance", hint = "beat Expert after it has crushed you",
+    { id = "vengeance", goal = "Beat Expert after losing to it by 10 or more",
       predicate = function(s, ctx)
           return ctx.humanWon
              and ctx.difficulty == "expert"
              and diffs(s).expert.worstLoss >= 10
       end },
-    { id = "draw_artist", label = "Draw Artist", hint = "finish a game in a perfect tie",
+    { id = "draw_artist", goal = "Finish a game in an exact tie",
       predicate = function(s, ctx)
           return ctx.margin == 0
       end },
-    { id = "boxed_in", label = "Boxed In", hint = "lose without claiming a single box",
+    { id = "boxed_in", goal = "Lose without claiming a single box",
       predicate = function(s, ctx)
           return (not ctx.humanWon) and ctx.humanScore == 0
       end },
 
     -- ── Geometric ─────────────────────────────────────────────────────────
-    { id = "four_corners", label = "Four Corners", hint = "win owning all four corners vs Medium+",
+    { id = "four_corners", goal = "Win owning all four corner boxes (Medium+)",
       predicate = function(s, ctx)
           return geoQualifies(ctx)
              and Geometry.ownsAll(ctx.humanBoxes, Geometry.cornerBoxes(ctx.boardSize))
       end },
-    { id = "full_stripe", label = "Full Stripe", hint = "win owning a full row or column vs Medium+",
+    { id = "full_stripe", goal = "Win owning a full row or column (Medium+)",
       predicate = function(s, ctx)
           return geoQualifies(ctx)
              and Geometry.hasFullStripe(ctx.humanBoxes, ctx.boardSize)
       end },
 
     -- ── Streaks ───────────────────────────────────────────────────────────
-    { id = "on_fire", label = "On Fire", hint = "win 5 Expert games in a row",
+    { id = "on_fire", goal = "Win 5 Expert games in a row",
       predicate = function(s, ctx)
           return diffs(s).expert.bestStreak >= 5
       end },
-    { id = "untouchable", label = "Untouchable", hint = "a 10-win streak on any difficulty",
+    { id = "untouchable", goal = "Win 10 games in a row on any difficulty",
       predicate = function(s, ctx)
           for _, d in ipairs(DIFFICULTIES) do
               if diffs(s)[d].bestStreak >= 10 then return true end
@@ -136,21 +137,21 @@ Badges.list = {
       end },
 
     -- ── Collection capstones ──────────────────────────────────────────────
-    { id = "survey_course", label = "Survey Course", hint = "win on every board size",
+    { id = "survey_course", goal = "Win on every board size (4 through 8)",
       predicate = function(s, ctx)
           for d = 4, 8 do
               if not s.bySize[d] or s.bySize[d].wins < 1 then return false end
           end
           return true
       end },
-    { id = "tier_climber", label = "Tier Climber", hint = "win on every difficulty",
+    { id = "tier_climber", goal = "Win on every difficulty",
       predicate = function(s, ctx)
           for _, d in ipairs(DIFFICULTIES) do
               if diffs(s)[d].wins < 1 then return false end
           end
           return true
       end },
-    { id = "spectrum", label = "Spectrum", hint = "win on every size AND every difficulty",
+    { id = "spectrum", goal = "Win on every board size and every difficulty",
       predicate = function(s, ctx)
           for d = 4, 8 do
               if not s.bySize[d] or s.bySize[d].wins < 1 then return false end

@@ -9,10 +9,14 @@ local Board = import "board"
 local UI    = import "ui"
 local Ai    = import "ai"
 local Stats = import "stats"
+local Fonts = import "fonts"   -- central type hierarchy (passed to UI via opts)
 
 Stats.load()
 
 local gfx <const> = playdate.graphics
+
+-- Default running text everywhere unless a draw routine overrides it.
+gfx.setFont(Fonts.body)
 
 playdate.display.setRefreshRate(20) -- sets frame rate to 20 FPS
 
@@ -92,7 +96,7 @@ end
 -- Global runtime state -----------------------------------------------------
 -- ---------------------------------------------------------------------------
 local appState       = "menu"        -- "menu", "settings", "pvc", "pvp"
-local menuOptions    = { "1 Player", "2 Player", "Badges", "Settings" }
+local menuOptions    = { "1 Player", "2 Player", "Career", "Settings" }
 local selectedOption = 1
 local settingsCursor = 1             -- 1 = board size, 2 = difficulty, 3 = first player
 local ui             = nil
@@ -177,6 +181,7 @@ local function initGame(mode)
         end,
         onMainMenu = returnToMainMenu,
         sound = sound,
+        fonts = Fonts,
     })
     ui.mode  = mode
     appState = mode
@@ -219,7 +224,9 @@ local function drawSettings()
     gfx.setColor(gfx.kColorBlack)
 
     -- Header with underline
-    gfx.drawText("Settings", 40, 20)
+    gfx.setFont(Fonts.h1)
+    gfx.drawText("Settings", 40, 16)
+    gfx.setFont(Fonts.body)
     gfx.drawLine(40, 42, sw - 40, 42)
 
     -- Value rows (1-3), evenly spaced
@@ -246,7 +253,9 @@ local function drawSettings()
     mark = (settingsCursor == SETTINGS_ROW_RESET) and "> " or "  "
     gfx.drawText(mark .. "Reset all stats & badges", 40, 180)
 
-    gfx.drawText("A: select   B: back", 40, 218)
+    gfx.setFont(Fonts.caption)
+    gfx.drawText("A: select   B: back", 40, 220)
+    gfx.setFont(Fonts.body)
 end
 
 local function handleSettingsInput()
@@ -305,7 +314,7 @@ end
 -- ---------------------------------------------------------------------------
 -- STATS SCREEN -------------------------------------------------------------
 -- ---------------------------------------------------------------------------
-local STATS_TABS  <const> = { "Badges", "Totals", "By Difficulty" }
+local STATS_TABS  <const> = { "Goals", "Record", "Summary" }
 local STATS_CONTENT_TOP <const> = 40   -- first row of tab content
 local STATS_FOOTER_Y    <const> = 218  -- pinned footer baseline; keep content above this
 local statsTab     = 1   -- 1 = Badges, 2 = Totals, 3 = By Difficulty
@@ -321,75 +330,59 @@ end
 
 local function drawStatsHeader()
     local sw = playdate.display.getWidth()
-    local f = gfx.getSystemFont()
-    gfx.drawText("Stats", 20, 12)
+    gfx.setFont(Fonts.h1)
+    gfx.drawText("Career", 20, 8)
 
     -- Tab strip on the right.
+    gfx.setFont(Fonts.h2)
+    local f = Fonts.h2
     local x = sw - 10
     for i = #STATS_TABS, 1, -1 do
         local label = STATS_TABS[i]
         local w = f:getTextWidth(label)
         x = x - w
         if i == statsTab then
-            gfx.fillRect(x - 4, 8, w + 8, f:getHeight() + 6)
+            gfx.fillRect(x - 4, 10, w + 8, f:getHeight() + 6)
             gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-            gfx.drawText(label, x, 12)
+            gfx.drawText(label, x, 13)
             gfx.setImageDrawMode(gfx.kDrawModeCopy)
         else
-            gfx.drawText(label, x, 12)
+            gfx.drawText(label, x, 13)
         end
         x = x - 12
     end
-    gfx.drawLine(20, 32, sw - 20, 32)
+    gfx.setFont(Fonts.body)
+    gfx.drawLine(20, 34, sw - 20, 34)
 end
 
-local function drawKeyValueRows(rows, startY)
-    local sw = playdate.display.getWidth()
-    local f = gfx.getSystemFont()
-    local lineH = f:getHeight() + 2
-    for i, row in ipairs(rows) do
-        local y = startY + (i - 1) * lineH
-        local label, value = row[1], row[2]
-        gfx.drawText(label, 30, y)
-        local vw = f:getTextWidth(value)
-        gfx.drawText(value, sw - 30 - vw, y)
-    end
-end
 
-local function drawTotalsTab()
-    local t = Stats.data.totals
-    drawKeyValueRows({
-        { "Games played",       tostring(t.gamesPlayed) },
-        { "  vs CPU",           string.format("%d (you 1st) + %d (CPU 1st)", t.gamesPvcP1, t.gamesPvcP2) },
-        { "  two-player",       tostring(t.gamesPvp) },
-        { "Boxes claimed",      string.format("%d   (conceded %d)", t.boxesClaimed, t.boxesAgainst) },
-        { "Longest chain ever", tostring(t.longestChain) },
-        { "Time played",        fmtDuration(t.secondsPlayed) },
-    }, STATS_CONTENT_TOP)
-end
-
+-- Win/Loss/Draw/Best grid. Fixed columns so nothing flows off the right.
 local function drawDifficultyTab()
     local difficulties_ <const> = { "easy", "medium", "hard", "expert" }
-    local f = gfx.getSystemFont()
-    local lineH = f:getHeight() + 6
-    local y = STATS_CONTENT_TOP
+    local f = Fonts.body
+    local lineH = f:getHeight() + 8
+    local nameX, wX, lX, dX, bestX, strkX = 30, 140, 180, 220, 265, 330
+
+    -- Header row (bold).
+    gfx.setFont(Fonts.h2)
+    local hy = STATS_CONTENT_TOP
+    gfx.drawText("W",      wX,    hy)
+    gfx.drawText("L",      lX,    hy)
+    gfx.drawText("D",      dX,    hy)
+    gfx.drawText("Best",   bestX, hy)
+    gfx.drawText("Streak", strkX, hy)
+    gfx.setFont(f)
+
+    local y = hy + lineH
     for _, key in ipairs(difficulties_) do
         local d = Stats.data.byDifficulty[key]
         local title = key:sub(1, 1):upper() .. key:sub(2)
-        gfx.drawText(string.format("%-7s %dW  %dL  %dD", title, d.wins, d.losses, d.draws), 30, y)
-
-        local extras
-        if d.games == 0 then
-            extras = "no games yet"
-        elseif d.wins == 0 then
-            extras = "no wins yet"
-        else
-            local best   = "best +" .. d.bestWin
-            local fast   = d.fastestWinSecs and fmtDuration(d.fastestWinSecs) or "-"
-            local streak = "streak " .. d.bestStreak
-            extras = best .. "  " .. fast .. "  " .. streak
-        end
-        gfx.drawText(extras, 240, y)
+        gfx.drawText(title,            nameX, y)
+        gfx.drawText(tostring(d.wins),   wX,  y)
+        gfx.drawText(tostring(d.losses), lX,  y)
+        gfx.drawText(tostring(d.draws),  dX,  y)
+        gfx.drawText(d.wins > 0 and ("+" .. d.bestWin) or "-", bestX, y)
+        gfx.drawText(tostring(d.bestStreak), strkX, y)
         y = y + lineH
     end
 end
@@ -411,14 +404,33 @@ local function wrapText(f, str, maxW)
     return lines
 end
 
+-- A small checkbox bullet: outlined when locked, filled with a tick when
+-- earned. Anchors the eye far better than "???".
+local function drawCheckbox(x, y, s, checked)
+    gfx.setColor(gfx.kColorBlack)
+    if checked then
+        gfx.fillRect(x, y, s, s)
+        gfx.setColor(gfx.kColorWhite)
+        gfx.setLineWidth(2)
+        gfx.drawLine(x + 3, y + s // 2, x + s // 2 - 1, y + s - 4)
+        gfx.drawLine(x + s // 2 - 1, y + s - 4, x + s - 3, y + 3)
+        gfx.setLineWidth(1)
+        gfx.setColor(gfx.kColorBlack)
+    else
+        gfx.drawRect(x, y, s, s)
+    end
+end
+
 local function drawBadgesTab()
-    local f = gfx.getSystemFont()
+    local f = Fonts.body
     local lineH = f:getHeight() + 2
     local total = #Stats.allBadges
     local sw = playdate.display.getWidth()
-    local x0, xCont = 30, 42                  -- first line / wrapped-continuation x
-    local maxW  = sw - x0    - 20
-    local contW = sw - xCont - 20
+    local BOX = 14
+    local x0    = 30                          -- checkbox x
+    local xText = x0 + BOX + 10               -- text x (first + continuation)
+    local maxW  = sw - xText - 20
+    local contW = maxW
     local bottomLimit = STATS_FOOTER_Y - 6    -- keep blocks clear of the footer
 
     -- Clamp scroll. maxScroll = total-1 guarantees the last badge is always
@@ -435,12 +447,10 @@ local function drawBadgesTab()
         if not b then break end
 
         local earned = Stats.data.badges[b.id]
-        local head = earned
-            and (b.label .. " - " .. b.hint)
-            or  ("??? - " .. b.hint)
+        -- The checkbox conveys locked/earned; the goal text is the same
+        -- either way (bold when earned for a touch of emphasis).
+        local head = b.goal
 
-        -- Wrap using the narrower continuation width so every line fits at
-        -- whichever x it lands on.
         local lines = wrapText(f, head, contW)
         local blockH = #lines * lineH
 
@@ -448,14 +458,15 @@ local function drawBadgesTab()
         -- show at least one badge so a tall entry can't blank the page).
         if shown > 0 and (y + blockH) > bottomLimit then break end
 
-        for li, ln in ipairs(lines) do
-            -- `*...*` is Playdate bold markup; re-apply per wrapped line so
-            -- continuation lines of an earned badge stay bold too.
-            local text = earned and ("*" .. ln .. "*") or ln
-            gfx.drawText(text, (li == 1) and x0 or xCont, y)
+        drawCheckbox(x0, y + 1, BOX, earned)
+
+        -- Consistent body weight for every goal; the checkbox alone conveys
+        -- earned vs. locked.
+        for _, ln in ipairs(lines) do
+            gfx.drawText(ln, xText, y)
             y = y + lineH
         end
-        y = y + 4                              -- gap between badges
+        y = y + 6                              -- gap between badges
         shown = shown + 1
         if y > bottomLimit then break end
     end
@@ -468,6 +479,50 @@ local function drawBadgesTab()
     end
 end
 
+-- Totals rendered as a short prose summary (singular/plural aware) rather
+-- than a key/value table — easier to read at a glance.
+local function drawTotalsTab()
+    local t = Stats.data.totals
+
+    local function plural(count, singular, pluralForm)
+        if count == 1 then return "1 " .. singular end
+        return count .. " " .. pluralForm
+    end
+
+    local games = t.gamesPlayed
+    local pvc   = t.gamesPvcP1 + t.gamesPvcP2
+
+    local s1 = "You've played " .. plural(games, "game", "games") .. "."
+
+    local s2
+    if t.gamesPvp == 0 then
+        s2 = "All against the CPU."
+    elseif pvc == 0 then
+        s2 = "All two-player."
+    else
+        s2 = pvc .. " of those were vs the CPU and "
+            .. plural(t.gamesPvp, "was two-player", "were two-player") .. "."
+    end
+
+    local s3 = "You've claimed " .. plural(t.boxesClaimed, "box", "boxes")
+        .. " and conceded " .. t.boxesAgainst .. "."
+    local s4 = "Your longest single-turn chain is " .. t.longestChain .. "."
+    local s5 = "Total time played: " .. fmtDuration(t.secondsPlayed) .. "."
+
+    local paragraph = table.concat({ s1, s2, s3, s4, s5 }, "  ")
+    local f = Fonts.body
+    local sw = playdate.display.getWidth()
+    local lineH = f:getHeight() + 4
+    local lines = wrapText(f, paragraph, sw - 60)
+    -- Breathing room below the header bar; the paragraph is short so this
+    -- also evens out the (otherwise large) empty space below it.
+    local y = STATS_CONTENT_TOP + 22
+    for _, ln in ipairs(lines) do
+        gfx.drawText(ln, 30, y)
+        y = y + lineH
+    end
+end
+
 local function drawStats()
     gfx.setColor(gfx.kColorBlack)
     drawStatsHeader()
@@ -476,13 +531,13 @@ local function drawStats()
         drawBadgesTab()
     elseif Stats.data.totals.gamesPlayed == 0 then
         local msg = "No finished games yet - go play one!"
-        local f = gfx.getSystemFont()
+        local f = Fonts.body
         local sw = playdate.display.getWidth()
         gfx.drawText(msg, math.floor((sw - f:getTextWidth(msg)) / 2), 110)
     elseif statsTab == 2 then
-        drawTotalsTab()
+        drawDifficultyTab()   -- "Record"
     else
-        drawDifficultyTab()
+        drawTotalsTab()       -- "Summary"
     end
 
     gfx.drawText("< > tabs   B back", 20, STATS_FOOTER_Y)
@@ -519,7 +574,7 @@ local function drawStatsResetConfirm()
         "",
         "A = Reset    B = Cancel",
     }
-    local f = gfx.getSystemFont()
+    local f = Fonts.body
     local lineH = f:getHeight() + 6
     local sw, sh = playdate.display.getSize()
     local totalH = #lines * lineH
@@ -641,7 +696,7 @@ local function drawContextLine(option, y)
     elseif option == 2 then
         text = settings.numDots .. "x" .. settings.numDots .. " board"
     elseif option == 3 then
-        text = countEarnedBadges() .. " of " .. #Stats.allBadges .. " earned"
+        text = countEarnedBadges() .. " of " .. #Stats.allBadges .. " goals"
     else
         text = "board size, difficulty, first player"
     end
@@ -654,7 +709,7 @@ local function drawStatsRibbon(y)
     local parts = {
         t.gamesPlayed   .. " games",
         t.boxesClaimed  .. " boxes",
-        countEarnedBadges() .. "/" .. #Stats.allBadges .. " badges",
+        countEarnedBadges() .. "/" .. #Stats.allBadges .. " goals",
     }
     if t.longestChain > 0 then
         parts[#parts + 1] = "best chain " .. t.longestChain
@@ -662,13 +717,9 @@ local function drawStatsRibbon(y)
     drawCenteredText(table.concat(parts, "  -  "), y)
 end
 
--- Smaller font for context line + stats ribbon. Larger font for menu labels.
--- Both fall back to the system font if the SDK path can't be loaded.
-local smallFont = playdate.graphics.font.new("/System/Fonts/Roobert-10-Bold")
-                or gfx.getSystemFont()
-local labelFont = playdate.graphics.font.new("/System/Fonts/Roobert-20-Medium")
-                or playdate.graphics.font.new("/System/Fonts/Asheville-Sans-14-Bold")
-                or gfx.getSystemFont()
+-- Aliases into the central type hierarchy (see fonts.lua).
+local smallFont = Fonts.caption   -- context line + stats ribbon
+local labelFont = Fonts.h1        -- menu labels
 
 -- 2x2 menu grid:
 --   col 0          col 1
@@ -695,13 +746,15 @@ local function drawMenu()
     local sw = playdate.display.getWidth()
     gfx.setColor(gfx.kColorBlack)
 
-    -- 1. Chunky title with system-font tagline
+    -- 1. Chunky title with caption-weight tagline
     drawChunkyTitle("DOTS", 30)
     do
-        local f = gfx.getSystemFont()
+        gfx.setFont(Fonts.caption)
+        local f = Fonts.caption
         local sub = "and boxes"
         local w = f:getTextWidth(sub)
         gfx.drawText(sub, math.floor((sw - w) / 2), 56)
+        gfx.setFont(Fonts.body)
     end
 
     -- 2. Menu items, drawn in a 2x2 grid using the larger label font
@@ -737,7 +790,7 @@ local function drawMenu()
     drawContextLine(selectedOption, 185)
     -- 5. Stats ribbon (smaller font)
     drawStatsRibbon(220)
-    gfx.setFont(gfx.getSystemFont())
+    gfx.setFont(Fonts.body)
 end
 
 -- Move the menu cursor based on a d-pad press.

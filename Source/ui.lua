@@ -102,6 +102,7 @@ function UI.new(board, opts)
     self.onRestart  = opts.onRestart
     self.onMainMenu = opts.onMainMenu
     self.sound      = opts.sound
+    self.fonts      = opts.fonts   -- central type hierarchy (see fonts.lua)
 
     -- Build box lookup (edge lookup is on the board)
     self:buildBoxToCoord()
@@ -279,8 +280,10 @@ function UI:draw()
 
     -- Game‑over
     if self.board:isGameOver() then
-        local f = gfx.getSystemFont()
-        local th = f:getHeight()
+        local F   = self.fonts or {}
+        local sys = gfx.getSystemFont()
+        local fH1, fH2  = F.h1 or sys, F.h2 or sys
+        local fBody, fC = F.body or sys, F.caption or sys
 
         local winnerLine
         if p1Score > p2Score then winnerLine = "P1 wins!"
@@ -298,49 +301,59 @@ function UI:draw()
 
         local endMs = self.board.endMs or playdate.getCurrentTimeMilliseconds()
         local secs = math.floor((endMs - self.board.startMs) / 1000)
-        local mm = math.floor(secs / 60)
-        local ss = secs % 60
-        local timeLine = string.format("Time: %d:%02d", mm, ss)
+        local timeLine = string.format("Time: %d:%02d",
+            math.floor(secs / 60), secs % 60)
 
+        -- Each line carries its own font so the panel has real hierarchy.
         local lines = {}
 
-        -- Newly-unlocked badges (toasted at the top, max 3 shown).
         if self.newBadges and #self.newBadges > 0 then
             local cap = math.min(3, #self.newBadges)
             for i = 1, cap do
-                lines[#lines + 1] = "* Unlocked: " .. self.newBadges[i].label
+                lines[#lines + 1] = { "Goal: " .. self.newBadges[i].goal, fC }
             end
             if #self.newBadges > cap then
-                lines[#lines + 1] = "+" .. (#self.newBadges - cap) .. " more"
+                lines[#lines + 1] = { "+" .. (#self.newBadges - cap) .. " more", fC }
             end
         end
 
-        lines[#lines + 1] = "Game Over"
-        lines[#lines + 1] = winnerLine
-        lines[#lines + 1] = chainLine
-        lines[#lines + 1] = timeLine
-        lines[#lines + 1] = "(A: play again   B: menu)"
+        lines[#lines + 1] = { "Game Over",                  fH1 }
+        lines[#lines + 1] = { winnerLine,                   fH2 }
+        lines[#lines + 1] = { chainLine,                    fBody }
+        lines[#lines + 1] = { timeLine,                     fBody }
+        lines[#lines + 1] = { "(A: play again   B: menu)",  fC }
 
-        local maxW = 0
-        for _, l in ipairs(lines) do
-            local w = f:getTextWidth(l)
+        local maxW, totalH = 0, 0
+        local rowH = {}
+        for i, l in ipairs(lines) do
+            local font = l[2]
+            local w = font:getTextWidth(l[1])
             if w > maxW then maxW = w end
+            rowH[i] = font:getHeight() + 4
+            totalH = totalH + rowH[i]
         end
-        local lineH = th + 2
-        local panelW = maxW + 20
-        local panelH = #lines * lineH + 10
 
+        local panelW = maxW + 28
+        local panelH = totalH + 16
         local sw, sh = playdate.display.getSize()
         local px = math.floor((sw - panelW) / 2)
         local py = math.floor((sh - panelH) / 2)
 
+        -- Soft drop shadow, then the panel.
+        gfx.setColor(gfx.kColorBlack); gfx.setDitherPattern(0.5)
+        gfx.fillRect(px + 4, py + 5, panelW, panelH)
+        gfx.setDitherPattern(0)
         gfx.setColor(gfx.kColorWhite); gfx.fillRect(px, py, panelW, panelH)
-        gfx.setDitherPattern(0.5);     gfx.setColor(gfx.kColorBlack)
-        gfx.drawRect(px, py, panelW, panelH); gfx.setDitherPattern(0)
+        gfx.setColor(gfx.kColorBlack); gfx.drawRect(px, py, panelW, panelH)
+
+        local y = py + 8
         for i, l in ipairs(lines) do
-            local w = f:getTextWidth(l)
-            gfx.drawText(l, px + math.floor((panelW - w) / 2), py + 5 + (i - 1) * lineH)
+            gfx.setFont(l[2])
+            local w = l[2]:getTextWidth(l[1])
+            gfx.drawText(l[1], px + math.floor((panelW - w) / 2), y)
+            y = y + rowH[i]
         end
+        gfx.setFont(fBody)
     end
 end
 
