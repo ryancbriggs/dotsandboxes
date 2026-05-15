@@ -6,6 +6,8 @@ import "CoreLibs/timer"
 
 local sound = import "sound"    -- button‑click sounds
 local Board = import "board"
+import "focus"
+local Focus <const> = Focus
 local UI    = import "ui"
 local Ai    = import "ai"
 local Stats = import "stats"
@@ -223,17 +225,8 @@ end
 local SETTINGS_ROW_COUNT <const> = 4
 local SETTINGS_ROW_RESET <const> = 4
 
-local function drawSettingsCursor(y)
-    local BOX = 14
-    local x = 30
-    gfx.fillRect(x, y + 1, BOX, BOX)
-end
-
-local function drawSettingsValue(text, y)
-    local sw = playdate.display.getWidth()
-    local rightX = sw - 40
-    local w = (gfx.getFont() or gfx.getSystemFont()):getTextWidth(text)
-    gfx.drawText(text, rightX - w, y)
+local function drawSettingsValue(text, y, x)
+    gfx.drawText(text, x, y)
 end
 
 local function drawSettings()
@@ -246,27 +239,30 @@ local function drawSettings()
     gfx.setFont(Fonts.body)
     gfx.drawLine(20, 34, sw - 20, 34)
 
-    local labelX = 54
+    local labelX = 30
     local rowY = { 55, 90, 125 }
+    local rowH = Fonts.body:getHeight() + 8
+    local valueW = Fonts.body:getTextWidth("<  random  >")
+    local valueX = sw - 40 - valueW
 
-    if settingsCursor == 1 then drawSettingsCursor(rowY[1]) end
+    if settingsCursor == 1 then Focus.drawRect(20, rowY[1] - 4, sw - 40, rowH, { dither = 0.5 }) end
     gfx.drawText("Board size (dots)", labelX, rowY[1])
-    drawSettingsValue(string.format("<  %d  >", settings.numDots), rowY[1])
+    drawSettingsValue(string.format("<  %d  >", settings.numDots), rowY[1], valueX)
 
-    if settingsCursor == 2 then drawSettingsCursor(rowY[2]) end
+    if settingsCursor == 2 then Focus.drawRect(20, rowY[2] - 4, sw - 40, rowH, { dither = 0.5 }) end
     gfx.drawText("Difficulty", labelX, rowY[2])
-    drawSettingsValue(string.format("<  %s  >", settings.difficulty), rowY[2])
+    drawSettingsValue(string.format("<  %s  >", settings.difficulty), rowY[2], valueX)
 
-    if settingsCursor == 3 then drawSettingsCursor(rowY[3]) end
+    if settingsCursor == 3 then Focus.drawRect(20, rowY[3] - 4, sw - 40, rowH, { dither = 0.5 }) end
     gfx.drawText("First player", labelX, rowY[3])
-    drawSettingsValue(string.format("<  %s  >", firstPlayerDisplay()), rowY[3])
+    drawSettingsValue(string.format("<  %s  >", firstPlayerDisplay()), rowY[3], valueX)
 
     -- Divider above the destructive action
     gfx.setDitherPattern(0.5)
     gfx.drawLine(20, 162, sw - 20, 162)
     gfx.setDitherPattern(0)
 
-    if settingsCursor == SETTINGS_ROW_RESET then drawSettingsCursor(177) end
+    if settingsCursor == SETTINGS_ROW_RESET then Focus.drawRect(20, 173, sw - 40, rowH, { dither = 0.5 }) end
     gfx.drawText("Reset all stats and goals", labelX, 177)
 
     gfx.setFont(Fonts.caption)
@@ -835,6 +831,9 @@ end
 local MENU_ROW_Y      <const> = { 92, 138 }     -- y-positions for the two rows
 local MENU_COL_ICON_X <const> = { 50, 230 }     -- icon x per column
 local MENU_COL_LBL_X  <const> = { 78, 258 }     -- label x per column
+local MENU_CELL_X     <const> = { 22, 202 }
+local MENU_CELL_W     <const> = 176
+local MENU_CELL_H     <const> = 40
 
 local function drawMenu()
     local sw = playdate.display.getWidth()
@@ -863,14 +862,10 @@ local function drawMenu()
     -- 3. Selection rect — eases toward the selected cell instead of snapping.
     do
         local col, row = optionToGrid(selectedOption)
-        local y = MENU_ROW_Y[row + 1]
-        local label = menuOptions[selectedOption]
-        local w = labelFont:getTextWidth(label)
-        local padX, padY = 8, 4
-        local tx = MENU_COL_ICON_X[col + 1] - 14 - padX
-        local ty = y - padY
-        local tw = (MENU_COL_LBL_X[col + 1] + w + padX) - tx
-        local th = (y + fh + padY) - ty
+        local tx = MENU_CELL_X[col + 1]
+        local ty = MENU_ROW_Y[row + 1] - 7
+        local tw = MENU_CELL_W
+        local th = MENU_CELL_H
 
         if not menuSelAnim then
             menuSelAnim = { x = tx, y = ty, w = tw, h = th }
@@ -889,10 +884,7 @@ local function drawMenu()
         end
 
         local s = menuSelAnim
-        gfx.setDitherPattern(0.5); gfx.setLineWidth(3)
-        gfx.drawRect(math.floor(s.x), math.floor(s.y),
-                     math.floor(s.w), math.floor(s.h))
-        gfx.setDitherPattern(0); gfx.setLineWidth(1)
+        Focus.drawRect(s.x, s.y, s.w, s.h, { dither = 0.5 })
     end
 
     -- 4. Context line (smaller font) below the menu

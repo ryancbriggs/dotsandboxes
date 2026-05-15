@@ -2,6 +2,8 @@
 import "CoreLibs/graphics"
 import "CoreLibs/sprites"
 
+import "focus"
+local Focus <const> = Focus
 local gfx <const> = playdate.graphics
 
 local UI = {}
@@ -97,9 +99,7 @@ function UI:drawCursor()
     else
         gfx.setDitherPattern(0.5)
     end
-    gfx.setLineWidth(3)
-    gfx.drawRect(math.floor(s.x), math.floor(s.y),
-                 math.floor(s.w), math.floor(s.h))
+    Focus.drawRect(s.x, s.y, s.w, s.h, { pulse = true })
     gfx.setColor(gfx.kColorBlack)
     gfx.setDitherPattern(0)
 end
