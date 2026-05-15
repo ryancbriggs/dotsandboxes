@@ -3,5 +3,5 @@ author=Ryan Briggs
 description=A tiny graph-theory duel in a box-shaped universe.
 bundleID=com.ryan.dotsandboxes
 version=1.0
-buildNumber=4
+buildNumber=9
 imagePath=SystemAssets
