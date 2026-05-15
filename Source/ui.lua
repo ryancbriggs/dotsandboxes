@@ -6,8 +6,6 @@ local gfx <const> = playdate.graphics
 
 local UI = {}
 UI.__index = UI
-local Characters = import "characters"
-UI.Characters = Characters   -- exposed so main.lua can render chunky glyphs
 
 -- Visual constants ----------------------------------------------------------
 local SIDE_COL_W   <const> = 60   -- width of each side column (px)
@@ -15,14 +13,10 @@ local V_PADDING    <const> = 20   -- top & bottom padding (px)
 local LINE_WIDTH   <const> = 6    -- line thickness (px)
 local DOT_SIZE     <const> = 4    -- radius of dots (px)
 UI.DOT_SIZE = DOT_SIZE            -- for external use
-local DIGIT_SCALE  <const> = 6    -- chunky‑digit scale factor
 
 -- Box-claim animation (expand-and-settle) ----------------------------------
 local CLAIM_ANIM_MS    <const> = 260    -- total duration in milliseconds
 local CLAIM_OVERSHOOT  <const> = 1.25   -- scale at the peak of the pop
-
--- Chunky digits --------------------------------------------------------------
-local drawChunkyChar = Characters.drawChunkyChar
 
 -------------------------------------------------------------------------------
 -- Build reverse look‑up for boxes (edge lookup lives on the board)
@@ -121,6 +115,9 @@ function UI.new(board, opts)
     self.onMainMenu = opts.onMainMenu
     self.sound      = opts.sound
     self.fonts      = opts.fonts   -- central type hierarchy (see fonts.lua)
+    -- Pretty difficulty label ("Expert") shown under the CPU score in PvC.
+    local d = opts.difficulty
+    self.difficultyLabel = d and (d:sub(1, 1):upper() .. d:sub(2)) or nil
 
     -- Build box lookup (edge lookup is on the board)
     self:buildBoxToCoord()
@@ -275,26 +272,72 @@ function UI:draw()
     -- Side‑column scores
     do
         local sw, sh = playdate.display.getSize()
-        local dw, dh = 3*DIGIT_SCALE, 5*DIGIT_SCALE
-        local sy    = sh/2 - dh/2
+        local F    = self.fonts or {}
+        local sys  = gfx.getSystemFont()
+        local fNum = F.h1 or sys       -- big score numeral
+        local fLbl = F.caption or sys  -- player label / sublabel
+        local lblH = fLbl:getHeight()
+        local nh   = fNum:getHeight()
 
-        local function drawScore(val, px, active, useDither)
-            -- set digit dithering for P2
-            gfx.setDitherPattern(useDither and 0.5 or 0)
-            local s = tostring(val)
-            local totalW = #s * (dw + DIGIT_SCALE) - DIGIT_SCALE
-            local sx     = px + (SIDE_COL_W - totalW) / 2
+        -- Total boxes on the board: the score is a slice of this fixed pie,
+        -- so each column "stacks up" a bottom-anchored fill as boxes accrue.
+        local total = (self.board.DOTS - 1) * (self.board.DOTS - 1)
 
-            for i = 1, #s do
-                drawChunkyChar(s:sub(i,i), sx + (i-1)*(dw + DIGIT_SCALE), sy, DIGIT_SCALE)
+        local TUBE_W <const> = 26
+
+        -- Fixed vertical anchors shared by BOTH columns so every element is
+        -- rock-solid; only the fill height varies. Room is reserved for two
+        -- label lines (label + sublabel) even when a side has only one, and
+        -- for the active-turn bar whether or not it is showing.
+        local LBL_Y      = V_PADDING
+        local SUB_Y      = LBL_Y + lblH + 2
+        local NUM_Y      = SUB_Y + lblH + 6
+        local TUBE_TOP   = NUM_Y + nh + 10
+        local TUBE_BOT   = sh - V_PADDING
+        local TUBE_H     = TUBE_BOT - TUBE_TOP
+
+        local function drawColumn(score, label, sub, px, dither)
+            local colCx = px + SIDE_COL_W / 2
+
+            -- Header: text always solid black; player identity is carried by
+            -- the tube (gray for P2/CPU), matching the dithered P2 boxes.
+            gfx.setFont(fLbl)
+            local lw = fLbl:getTextWidth(label)
+            gfx.drawText(label, colCx - lw / 2, LBL_Y)
+            if sub then
+                local swid = fLbl:getTextWidth(sub)
+                gfx.drawText(sub, colCx - swid / 2, SUB_Y)
+            end
+
+            -- Numeral (same y on both sides).
+            gfx.setFont(fNum)
+            local s  = tostring(score)
+            local nw = fNum:getTextWidth(s)
+            gfx.drawText(s, colCx - nw / 2, NUM_Y)
+
+            -- Stacking tube: fixed frame, bottom-anchored fill ∝ score/total.
+            -- The whole tube (outline + fill) is 50% gray on the P2/CPU side.
+            local tubeX = colCx - TUBE_W / 2
+            gfx.setDitherPattern(dither and 0.5 or 0)
+            gfx.drawRect(tubeX, TUBE_TOP, TUBE_W, TUBE_H)
+            local frac  = total > 0 and (score / total) or 0
+            local fillH = math.floor((TUBE_H - 2) * frac)
+            if fillH > 0 then
+                gfx.fillRect(tubeX + 1, TUBE_BOT - 1 - fillH,
+                             TUBE_W - 2, fillH)
             end
             gfx.setDitherPattern(0)
-
-
         end
 
-        drawScore(p1Score,               0,               self.board.currentPlayer==1, false)
-        drawScore(p2Score, sw - SIDE_COL_W, self.board.currentPlayer==2, true)
+        local p1L, p1Sub, p2L, p2Sub
+        if self.mode == "pvc" then
+            p1L            = "You"
+            p2L, p2Sub     = "CPU", self.difficultyLabel
+        else
+            p1L, p2L       = "P1", "P2"
+        end
+        drawColumn(p1Score, p1L, p1Sub,               0, false)
+        drawColumn(p2Score, p2L, p2Sub, sw - SIDE_COL_W, true)
     end
 
     -- Game‑over
@@ -304,9 +347,13 @@ function UI:draw()
         local fH1, fH2  = F.h1 or sys, F.h2 or sys
         local fBody, fC = F.body or sys, F.caption or sys
 
+        local pvc = self.mode == "pvc"
+        local n1  = pvc and "You" or "P1"
+        local n2  = pvc and "CPU" or "P2"
+
         local winnerLine
-        if p1Score > p2Score then winnerLine = "P1 wins!"
-        elseif p2Score > p1Score then winnerLine = "P2 wins!"
+        if p1Score > p2Score then winnerLine = (pvc and "You win!" or "P1 wins!")
+        elseif p2Score > p1Score then winnerLine = (pvc and "CPU wins!" or "P2 wins!")
         else winnerLine = "It's a draw" end
 
         local lc1, lc2 = self.board.longestChain[1], self.board.longestChain[2]
@@ -314,7 +361,7 @@ function UI:draw()
         if lc1 == lc2 then
             chainLine = "Longest chain: tied at " .. lc1
         else
-            local who = (lc1 > lc2) and "P1" or "P2"
+            local who = (lc1 > lc2) and n1 or n2
             chainLine = "Longest chain: " .. who .. " - " .. math.max(lc1, lc2)
         end
 

@@ -32,14 +32,12 @@ local function profClock() return playdate.getElapsedTime() end
 
 -- ─── Coroutine scheduler state ───────────────────────────────────────────
 local SLICE_BUDGET_MS <const> = 15          -- per-frame compute slice
--- Per-difficulty pacing range: each AI move waits a random ms within
--- [min, max] before being applied. Gives each level a distinct tempo.
-local MIN_DELAY_RANGE <const> = {
-    easy   = {  80, 220 },   -- snappy, casual
-    medium = { 220, 450 },   -- a beat of thought
-    hard   = { 400, 800 },   -- deliberate
-    expert = {   0,   0 },   -- as long as the search needs; otherwise instant
-}
+-- Global pacing floor: a single, difficulty-independent minimum so a move
+-- never lands so fast it reads as a misclick. The *decision* move of a turn
+-- gets this floor; chain-continuation moves get none — those are obvious and
+-- are already paced by main.lua's decaying chainPace, so stacking a floor on
+-- each box of a long chain just feels clunky ("it's obvious, do it!").
+local AI_MIN_DELAY_MS <const> = 150
 
 local runtime = {
     coro          = nil,
@@ -1157,7 +1155,8 @@ function Ai.isThinking()
     return runtime.coro ~= nil
 end
 
-function Ai.beginChooseMove(board)
+-- `midChain` true ⇒ this is a forced chain-continuation move; skip the floor.
+function Ai.beginChooseMove(board, midChain)
     Ai.cancel()
     solveMemo = {}
     if dotsai and dotsai.solve_reset then dotsai.solve_reset() end
@@ -1168,12 +1167,7 @@ function Ai.beginChooseMove(board)
     profHotCalls, profHotS = 0, 0
     runtime.board   = board
     runtime.startMs = nowMs()
-    local range = MIN_DELAY_RANGE[Ai.difficulty] or { 0, 0 }
-    if range[1] >= range[2] then
-        runtime.minDelayMs = range[1]
-    else
-        runtime.minDelayMs = math.random(range[1], range[2])
-    end
+    runtime.minDelayMs = midChain and 0 or AI_MIN_DELAY_MS
     local strategy = Strategies[Ai.difficulty]
     runtime.coro = coroutine.create(function()
         return strategy(board)

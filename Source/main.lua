@@ -140,7 +140,7 @@ local function tickAI()
             end
         end
 
-        Ai.beginChooseMove(ui.board)
+        Ai.beginChooseMove(ui.board, ui.board.chainLen > 0)
     end
 
     local done, move = Ai.tick()
@@ -184,6 +184,7 @@ local function initGame(mode)
         onMainMenu = returnToMainMenu,
         sound = sound,
         fonts = Fonts,
+        difficulty = (mode == "pvc") and settings.difficulty or nil,
     })
     ui.mode  = mode
     appState = mode
@@ -632,19 +633,13 @@ end
 -- ---------------------------------------------------------------------------
 -- HOME MENU ----------------------------------------------------------------
 -- ---------------------------------------------------------------------------
-local drawChunkyChar = UI.Characters.drawChunkyChar
-local TITLE_SCALE <const> = 7   -- chunky pixel scale for the title
-
-local function drawChunkyTitle(text, cy)
+-- Centered wordmark title using the h1 face, drawn at vertical center `cy`.
+local function drawTitle(text, cy)
     local sw = playdate.display.getWidth()
-    local charW = 3 * TITLE_SCALE
-    local gap   = TITLE_SCALE
-    local totalW = #text * (charW + gap) - gap
-    local x = math.floor((sw - totalW) / 2)
-    local y = math.floor(cy - (5 * TITLE_SCALE) / 2)
-    for i = 1, #text do
-        drawChunkyChar(text:sub(i, i), x + (i - 1) * (charW + gap), y, TITLE_SCALE)
-    end
+    local f  = Fonts.h1
+    gfx.setFont(f)
+    local w = f:getTextWidth(text)
+    gfx.drawText(text, math.floor((sw - w) / 2), math.floor(cy - f:getHeight() / 2))
 end
 
 -- Menu icons --------------------------------------------------------------
@@ -768,16 +763,8 @@ local function drawMenu()
     local sw = playdate.display.getWidth()
     gfx.setColor(gfx.kColorBlack)
 
-    -- 1. Chunky title with caption-weight tagline
-    drawChunkyTitle("DOTS", 30)
-    do
-        gfx.setFont(Fonts.caption)
-        local f = Fonts.caption
-        local sub = "and boxes"
-        local w = f:getTextWidth(sub)
-        gfx.drawText(sub, math.floor((sw - w) / 2), 56)
-        gfx.setFont(Fonts.body)
-    end
+    -- 1. Wordmark title across the top, centered.
+    drawTitle("DOTS AND BOXES", 38)
 
     -- 2. Menu items, drawn in a 2x2 grid using the larger label font
     gfx.setFont(labelFont)
