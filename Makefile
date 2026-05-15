@@ -19,6 +19,19 @@ ifeq ($(SDK),)
 $(error SDK path not found; set ENV value PLAYDATE_SDK_PATH)
 endif
 
+# ── Build-time C/Lua parity gate ───────────────────────────────────────────
+# Compile + run the differential test that pins Source/solver.h (the shipped
+# C kernels) against an independent reference of the audited Lua algorithms.
+# Any divergence aborts the build before pdc runs. Skipped for `make clean`.
+# ~0.5s; zero cost to the game itself.
+ifeq ($(filter clean,$(MAKECMDGOALS)),)
+PARITY_OUT := $(shell cc -O2 -std=c11 -o /tmp/dots_parity_test tests/parity_test.c 2>&1 && /tmp/dots_parity_test 2>&1)
+ifeq ($(findstring PARITY_OK,$(PARITY_OUT)),)
+$(error C/Lua parity test FAILED — build aborted:$(PARITY_OUT))
+endif
+$(info [parity] $(PARITY_OUT))
+endif
+
 # C source files live in Source/ alongside the .lua game code so pdc picks
 # up everything in one pass.
 VPATH += Source

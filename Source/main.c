@@ -1,156 +1,34 @@
 //
-// main.c – Playdate C extension for the dots-and-boxes endgame solver.
+// main.c – Playdate C extension: thin Lua bindings over Source/solver.h.
 //
-// Exposes two Lua functions:
-//   dotsai.solve_reset()           clear the memo (call at start of each AI move)
-//   dotsai.solve(chains, loops)    compute the endgame value
+// Lua surface:
+//   dotsai.solve_reset()            clear the endgame memo (once per AI move)
+//   dotsai.solve(chains, loops)     endgame value (byte-string component lens)
+//   dotsai.cold_init(dots, be, eb)  send static board topology once per game
+//   dotsai.cold(filled, excluded)   cold-component decomposition for a position
 //
-// `chains` and `loops` are byte strings where each byte is one component's
-// length in boxes. Returns an integer score from the moving player's
-// perspective (positive = good for the mover).
-//
-// This is a port of evaluateTerminal's solveComponents call. The recursion
-// structure mirrors the Lua version. The memo is a fixed-size linear-probe
-// hash table keyed on a packed component-count struct.
+// All algorithmic logic lives in solver.h (pure C, no Playdate deps) so the
+// exact same code is exercised by the build-time parity test. This file only
+// marshals data across the Lua/C boundary.
 //
 
 #include <stdint.h>
 #include <string.h>
 
 #include "pd_api.h"
+#include "solver.h"
 
 static PlaydateAPI* pd = NULL;
 
-// ─── Endgame solver internals ──────────────────────────────────────────────
+// Resident board topology, set by dotsai.cold_init at game start.
+static ColdTopo s_topo;
+static int      s_topo_ready = 0;
 
-// Max component length we handle. On an 8x8 board the upper bound is 49
-// (all boxes in one component), but realistic positions stay well under
-// 32. Anything longer gets clamped on input.
-#define MAX_LEN    50
-
-// Power-of-two so we can mask instead of mod. 4096 entries × ~108 bytes
-// each ≈ 442 KB. Resets to all-zero between AI moves.
-#define MEMO_SIZE  4096
-
-typedef struct {
-    uint8_t chains[MAX_LEN + 1];  // count of chains with each length (idx 0 unused)
-    uint8_t loops [MAX_LEN + 1];
-} CompState;
-
-typedef struct {
-    CompState key;
-    int16_t   value;
-    uint8_t   occupied;
-} MemoEntry;
-
-static MemoEntry s_memo[MEMO_SIZE];
-
-static uint32_t hash_state(const CompState* s) {
-    // FNV-1a over the raw bytes.
-    uint32_t h = 2166136261u;
-    const uint8_t* p = (const uint8_t*)s;
-    for (unsigned i = 0; i < sizeof(*s); i++) {
-        h ^= p[i];
-        h *= 16777619u;
-    }
-    return h;
-}
-
-static int memo_lookup(const CompState* s, int* out) {
-    const uint32_t mask = MEMO_SIZE - 1;
-    const uint32_t base = hash_state(s) & mask;
-    for (uint32_t probe = 0; probe < MEMO_SIZE; probe++) {
-        uint32_t idx = (base + probe) & mask;
-        if (!s_memo[idx].occupied) return 0;
-        if (memcmp(&s_memo[idx].key, s, sizeof(CompState)) == 0) {
-            *out = s_memo[idx].value;
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static void memo_store(const CompState* s, int v) {
-    const uint32_t mask = MEMO_SIZE - 1;
-    const uint32_t base = hash_state(s) & mask;
-    for (uint32_t probe = 0; probe < MEMO_SIZE; probe++) {
-        uint32_t idx = (base + probe) & mask;
-        if (!s_memo[idx].occupied) {
-            s_memo[idx].key = *s;
-            s_memo[idx].value = (int16_t)v;
-            s_memo[idx].occupied = 1;
-            return;
-        }
-        if (memcmp(&s_memo[idx].key, s, sizeof(CompState)) == 0) {
-            s_memo[idx].value = (int16_t)v;
-            return;
-        }
-    }
-    // Table full; drop silently (very rare; cleared next solve_reset).
-}
-
-static int solve(CompState* s) {
-    int cached;
-    if (memo_lookup(s, &cached)) return cached;
-
-    // Terminal: no components left.
-    int any = 0;
-    for (int i = 0; i <= MAX_LEN; i++) {
-        if (s->chains[i] || s->loops[i]) { any = 1; break; }
-    }
-    if (!any) {
-        memo_store(s, 0);
-        return 0;
-    }
-
-    int best = -32768;
-
-    // Try removing one chain of each length present. DX is geometrically
-    // possible for any chain of length >= 2 (opp takes L-2, mover gets the
-    // 2-domino). The L=2/3 cases matter on small boards where short chains
-    // are common.
-    for (int len = 1; len <= MAX_LEN; len++) {
-        uint8_t prev = s->chains[len];
-        if (prev == 0) continue;
-        s->chains[len] = prev - 1;
-        int nextVal = solve(s);
-        s->chains[len] = prev;
-
-        int worst = -len - nextVal;
-        if (len >= 2) {
-            int keep = -(len - 4) + nextVal;
-            if (keep < worst) worst = keep;
-        }
-        if (worst > best) best = worst;
-    }
-
-    // Try removing one loop of each length present. Loop DX gives back a
-    // 4-domino (opp takes L-4, mover gets 4), so requires L >= 4.
-    for (int len = 1; len <= MAX_LEN; len++) {
-        uint8_t prev = s->loops[len];
-        if (prev == 0) continue;
-        s->loops[len] = prev - 1;
-        int nextVal = solve(s);
-        s->loops[len] = prev;
-
-        int worst = -len - nextVal;
-        if (len >= 4) {
-            int keep = -(len - 8) + nextVal;
-            if (keep < worst) worst = keep;
-        }
-        if (worst > best) best = worst;
-    }
-
-    if (best == -32768) best = 0;
-    memo_store(s, best);
-    return best;
-}
-
-// ─── Lua bindings ───────────────────────────────────────────────────────────
+// ─── solve bindings ─────────────────────────────────────────────────────────
 
 static int lua_solve_reset(lua_State* L) {
     (void)L;
-    memset(s_memo, 0, sizeof(s_memo));
+    solver_reset();
     return 0;
 }
 
@@ -166,20 +44,97 @@ static int lua_solve(lua_State* L) {
     if (chains) {
         for (size_t i = 0; i < chainsLen; i++) {
             uint8_t len = (uint8_t)chains[i];
-            if (len > MAX_LEN) len = MAX_LEN;
+            if (len > DOTSAI_MAX_LEN) len = DOTSAI_MAX_LEN;
             if (len > 0) state.chains[len]++;
         }
     }
     if (loops) {
         for (size_t i = 0; i < loopsLen; i++) {
             uint8_t len = (uint8_t)loops[i];
-            if (len > MAX_LEN) len = MAX_LEN;
+            if (len > DOTSAI_MAX_LEN) len = DOTSAI_MAX_LEN;
             if (len > 0) state.loops[len]++;
         }
     }
 
-    int v = solve(&state);
-    pd->lua->pushInt(v);
+    pd->lua->pushInt(solve(&state));
+    return 1;
+}
+
+// ─── cold bindings ──────────────────────────────────────────────────────────
+
+// dotsai.cold_init(numBoxes, numEdges, boxEdgesBytes, edgeBoxesBytes)
+//   boxEdgesBytes : numBoxes*4 bytes, slot edge ids (0 = none) row-major
+//   edgeBoxesBytes: numEdges*2 bytes, adjacent box ids (0 = none)
+static int lua_cold_init(lua_State* L) {
+    (void)L;
+    int numBoxes = pd->lua->getArgInt(1);
+    int numEdges = pd->lua->getArgInt(2);
+    size_t beLen = 0, ebLen = 0;
+    const char* be = pd->lua->getArgBytes(3, &beLen);
+    const char* eb = pd->lua->getArgBytes(4, &ebLen);
+
+    s_topo_ready = 0;
+    if (numBoxes < 1 || numBoxes > DOTSAI_MAX_BOXES) return 0;
+    if (numEdges < 1 || numEdges > DOTSAI_MAX_EDGES) return 0;
+    if (!be || beLen < (size_t)numBoxes * 4) return 0;
+    if (!eb || ebLen < (size_t)numEdges * 2) return 0;
+
+    memset(&s_topo, 0, sizeof(s_topo));
+    s_topo.numBoxes = numBoxes;
+    s_topo.numEdges = numEdges;
+    for (int b = 1; b <= numBoxes; b++)
+        for (int k = 0; k < 4; k++)
+            s_topo.boxEdges[b][k] = (uint8_t)be[(b - 1) * 4 + k];
+    for (int e = 1; e <= numEdges; e++) {
+        s_topo.edgeBoxes[e][0] = (uint8_t)eb[(e - 1) * 2 + 0];
+        s_topo.edgeBoxes[e][1] = (uint8_t)eb[(e - 1) * 2 + 1];
+    }
+    s_topo_ready = 1;
+    return 0;
+}
+
+// dotsai.cold(filledBytes, excludedBytes) -> packed component bytes
+//   filledBytes  : numEdges bytes, 1 if that edge id is filled
+//   excludedBytes: numBoxes bytes (or empty), 1 if that box is pre-seen (hot)
+// Return encoding: [numComps] then per comp
+//   [len][isLoop][edge][nEntries] [entry...]
+static int lua_cold(lua_State* L) {
+    (void)L;
+    if (!s_topo_ready) { pd->lua->pushNil(); return 1; }
+
+    size_t fLen = 0, xLen = 0;
+    const char* filled   = pd->lua->getArgBytes(1, &fLen);
+    const char* excluded = pd->lua->getArgBytes(2, &xLen);
+    if (!filled || fLen < (size_t)s_topo.numEdges) { pd->lua->pushNil(); return 1; }
+
+    // 1-based filled/excluded scratch (index 0 unused, matches topology).
+    static uint8_t fbuf[DOTSAI_MAX_EDGES + 1];
+    static uint8_t xbuf[DOTSAI_MAX_BOXES + 1];
+    fbuf[0] = 0;
+    for (int e = 1; e <= s_topo.numEdges; e++) fbuf[e] = (uint8_t)filled[e - 1];
+    uint8_t* xptr = NULL;
+    if (excluded && xLen >= (size_t)s_topo.numBoxes) {
+        xbuf[0] = 0;
+        for (int b = 1; b <= s_topo.numBoxes; b++) xbuf[b] = (uint8_t)excluded[b - 1];
+        xptr = xbuf;
+    }
+
+    static ColdComp comps[DOTSAI_MAX_BOXES];
+    int n = cold_decompose(&s_topo, fbuf, xptr, comps);
+
+    // Serialize.
+    static uint8_t obuf[1 + DOTSAI_MAX_BOXES * 4 + DOTSAI_MAX_EDGES];
+    int o = 0;
+    obuf[o++] = (uint8_t)n;
+    for (int i = 0; i < n; i++) {
+        ColdComp* c = &comps[i];
+        obuf[o++] = (uint8_t)c->len;
+        obuf[o++] = (uint8_t)c->isLoop;
+        obuf[o++] = (uint8_t)c->edge;
+        obuf[o++] = (uint8_t)c->nEntries;
+        for (int k = 0; k < c->nEntries; k++) obuf[o++] = c->entry[k];
+    }
+    pd->lua->pushBytes((const char*)obuf, (size_t)o);
     return 1;
 }
 
@@ -193,12 +148,14 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg) {
     if (event == kEventInitLua) {
         pd = playdate;
         const char* err = NULL;
-        if (!pd->lua->addFunction(lua_solve_reset, "dotsai.solve_reset", &err)) {
+        if (!pd->lua->addFunction(lua_solve_reset, "dotsai.solve_reset", &err))
             pd->system->logToConsole("dotsai.solve_reset: %s", err ? err : "?");
-        }
-        if (!pd->lua->addFunction(lua_solve, "dotsai.solve", &err)) {
+        if (!pd->lua->addFunction(lua_solve, "dotsai.solve", &err))
             pd->system->logToConsole("dotsai.solve: %s", err ? err : "?");
-        }
+        if (!pd->lua->addFunction(lua_cold_init, "dotsai.cold_init", &err))
+            pd->system->logToConsole("dotsai.cold_init: %s", err ? err : "?");
+        if (!pd->lua->addFunction(lua_cold, "dotsai.cold", &err))
+            pd->system->logToConsole("dotsai.cold: %s", err ? err : "?");
     }
     return 0;
 }

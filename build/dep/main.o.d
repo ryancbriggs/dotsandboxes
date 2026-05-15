@@ -51,7 +51,8 @@ build/Source/main.o: Source/main.c \
  /usr/local/playdate/gcc-arm-none-eabi-9-2019-q4-major/arm-none-eabi/include/sys/sched.h \
  /usr/local/playdate/gcc-arm-none-eabi-9-2019-q4-major/arm-none-eabi/include/machine/types.h \
  /usr/local/playdate/gcc-arm-none-eabi-9-2019-q4-major/arm-none-eabi/include/sys/stdio.h \
- /Users/ryan/Developer/PlaydateSDK/C_API/pd_api/pd_api_sys.h
+ /Users/ryan/Developer/PlaydateSDK/C_API/pd_api/pd_api_sys.h \
+ Source/solver.h
 
 /usr/local/playdate/gcc-arm-none-eabi-9-2019-q4-major/lib/gcc/arm-none-eabi/9.2.1/include/stdint.h:
 
@@ -158,3 +159,5 @@ build/Source/main.o: Source/main.c \
 /usr/local/playdate/gcc-arm-none-eabi-9-2019-q4-major/arm-none-eabi/include/sys/stdio.h:
 
 /Users/ryan/Developer/PlaydateSDK/C_API/pd_api/pd_api_sys.h:
+
+Source/solver.h:

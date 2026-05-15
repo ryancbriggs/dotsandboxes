@@ -10,11 +10,25 @@ local Ai = {}
 Ai.difficulty = "medium"
 Ai.debugLogging = false   -- toggled via system menu; logs go to the tethered console
 
--- Per-move profile counters; reset in Ai.beginChooseMove.
+-- Per-move profile counters; reset in Ai.beginChooseMove. Timings use
+-- playdate.getElapsedTime() (high-res float seconds, monotonic — nothing
+-- else resets the elapsed timer) since getCurrentTimeMilliseconds() can't
+-- resolve the sub-millisecond per-node primitives. Accumulators are in
+-- seconds; the log converts to ms. All gated behind Ai.debugLogging so
+-- there is zero overhead in normal play.
 local profSolveCalls   = 0
 local profSolveTotalMs = 0
 local profSolveFirstMs = 0
 local profApplyCalls   = 0
+local profApplyS       = 0   -- applyMove + undoMove wall time
+local profClassifyCalls= 0
+local profClassifyS    = 0   -- EdgeUtils.classify
+local profColdCalls    = 0
+local profColdS        = 0   -- Components.collectCold
+local profHotCalls     = 0
+local profHotS         = 0   -- findHotComponent
+
+local function profClock() return playdate.getElapsedTime() end
 
 -- ─── Coroutine scheduler state ───────────────────────────────────────────
 local SLICE_BUDGET_MS <const> = 15          -- per-frame compute slice
@@ -75,6 +89,7 @@ end
 
 -- Classify every free edge once so strategies can reuse the same snapshot.
 function EdgeUtils.classify(board)
+    local _t = Ai.debugLogging and profClock() or nil
     local snapshot = {
         free    = {},
         closers = {},
@@ -95,6 +110,10 @@ function EdgeUtils.classify(board)
         if isSafe   then snapshot.safes[#snapshot.safes + 1]       = edge end
     end
 
+    if _t then
+        profClassifyS     = profClassifyS + (profClock() - _t)
+        profClassifyCalls = profClassifyCalls + 1
+    end
     return snapshot
 end
 
@@ -110,6 +129,7 @@ local Components = {}
 -- boxes as belonging to an active hot chain that should be analyzed
 -- separately rather than rolled into a cold component.
 function Components.collectCold(board, excludedBoxes)
+    local _t = Ai.debugLogging and profClock() or nil
     local comps, seen = {}, {}
     if excludedBoxes then
         for k in pairs(excludedBoxes) do seen[k] = true end
@@ -154,6 +174,95 @@ function Components.collectCold(board, excludedBoxes)
         end
     end
 
+    if _t then
+        profColdS     = profColdS + (profClock() - _t)
+        profColdCalls = profColdCalls + 1
+    end
+    return comps
+end
+
+-- ─── C-accelerated cold decomposition ───────────────────────────────────────
+-- Components.collectCold above is the readable, audited reference (and the
+-- no-C fallback). When the C extension is loaded we push the static board
+-- topology once per board size, then each call only marshals the edge-fill
+-- bitset. The C `cold_decompose` mirrors collectCold exactly (enforced by the
+-- build-time parity test in tests/parity_test.c).
+
+local coldTopoDots = nil   -- board size whose topology is currently resident
+
+local function ensureColdTopo(board)
+    if not (dotsai and dotsai.cold_init) then return false end
+    if coldTopoDots == board.DOTS then return true end
+
+    local numBoxes = #board.boxEdges
+    local numEdges = #board.edgeToCoord
+    local be, eb = {}, {}
+    for b = 1, numBoxes do
+        local e = board.boxEdges[b]
+        be[#be + 1] = e[1]; be[#be + 1] = e[2]
+        be[#be + 1] = e[3]; be[#be + 1] = e[4]
+    end
+    for e = 1, numEdges do
+        local boxes = board.edgeBoxes[e] or {}
+        eb[#eb + 1] = boxes[1] or 0
+        eb[#eb + 1] = boxes[2] or 0
+    end
+    dotsai.cold_init(numBoxes, numEdges,
+        string.char(table.unpack(be)), string.char(table.unpack(eb)))
+    coldTopoDots = board.DOTS
+    return true
+end
+
+-- C-preferring cold decomposition. Returns the same shape collectCold does:
+-- a list of { len, isLoop, edge, entryEdges } (entryEdges nil for loops).
+function Components.cold(board, excludedBoxes)
+    local _t = Ai.debugLogging and profClock() or nil
+    if not (dotsai and dotsai.cold) or not ensureColdTopo(board) then
+        -- Fallback path is already timed inside collectCold; don't double-count.
+        return Components.collectCold(board, excludedBoxes)
+    end
+
+    local numEdges = #board.edgeToCoord
+    local numBoxes = #board.boxEdges
+    local fbytes = {}
+    for e = 1, numEdges do fbytes[e] = board.edgesFilled[e] and 1 or 0 end
+    local filledStr = string.char(table.unpack(fbytes))
+
+    local excludedStr = ""
+    if excludedBoxes then
+        local xb = {}
+        for b = 1, numBoxes do xb[b] = excludedBoxes[b] and 1 or 0 end
+        excludedStr = string.char(table.unpack(xb))
+    end
+
+    local packed = dotsai.cold(filledStr, excludedStr)
+    if not packed then
+        return Components.collectCold(board, excludedBoxes)
+    end
+
+    local comps = {}
+    local pos = 1
+    local n = packed:byte(pos); pos = pos + 1
+    for _ = 1, n do
+        local len      = packed:byte(pos);     pos = pos + 1
+        local isLoop   = packed:byte(pos) == 1; pos = pos + 1
+        local edge     = packed:byte(pos);     pos = pos + 1
+        local nEntries = packed:byte(pos);     pos = pos + 1
+        local comp = { len = len, isLoop = isLoop, edge = edge }
+        if nEntries > 0 then
+            local entries = {}
+            for i = 1, nEntries do
+                entries[i] = packed:byte(pos); pos = pos + 1
+            end
+            comp.entryEdges = entries
+        end
+        comps[#comps + 1] = comp
+    end
+
+    if _t then
+        profColdS     = profColdS + (profClock() - _t)
+        profColdCalls = profColdCalls + 1
+    end
     return comps
 end
 
@@ -361,7 +470,7 @@ function Endgame.negamaxSolver(board, snapshot)
         return snapshot.safes[math.random(#snapshot.safes)]
     end
 
-    local comps = Components.collectCold(board)
+    local comps = Components.cold(board)
     if #comps == 0 then
         return snapshot.free[math.random(#snapshot.free)]
     end
@@ -404,7 +513,7 @@ end
 
 function Endgame.berlekampSolver(board, snapshot)
     snapshot = snapshot or EdgeUtils.classify(board)
-    local comps = Components.collectCold(board)
+    local comps = Components.cold(board)
     if #comps == 0 then
         return snapshot.free[math.random(#snapshot.free)]
     end
@@ -461,6 +570,7 @@ local function applyMove(board, edge)
     -- corresponding undoMove would nil out edgesFilled[edge] and erase a
     -- real, previously-played move. Return nil so undoMove becomes a no-op.
     if board.edgesFilled[edge] then return nil end
+    local _t = Ai.debugLogging and profClock() or nil
 
     -- Snapshot every field playEdge can mutate, including the stat fields
     -- (chainLen / longestChain / endMs) so AI search doesn't pollute them.
@@ -479,13 +589,17 @@ local function applyMove(board, edge)
         state.boxes[#state.boxes + 1] = { id = boxId, owner = board.boxOwner[boxId] }
     end
     applyDepth = applyDepth + 1
-    if Ai.debugLogging then profApplyCalls = profApplyCalls + 1 end
     board:playEdge(edge)
+    if _t then
+        profApplyS     = profApplyS + (profClock() - _t)
+        profApplyCalls = profApplyCalls + 1
+    end
     return state
 end
 
 local function undoMove(board, state)
     if not state then return end  -- applyMove refused; nothing to roll back
+    local _t = Ai.debugLogging and profClock() or nil
     board.currentPlayer    = state.prevPlayer
     board.score[1], board.score[2] = state.prevScores[1], state.prevScores[2]
     board.chainLen         = state.prevChainLen
@@ -498,6 +612,7 @@ local function undoMove(board, state)
         board.boxOwner[info.id] = info.owner
     end
     applyDepth = applyDepth - 1
+    if _t then profApplyS = profApplyS + (profClock() - _t) end
 end
 
 -- Find any active "hot" component (chain or loop with a 3-filled box).
@@ -509,6 +624,7 @@ end
 -- current player will consume this component, and we compute their value
 -- analytically (greedy vs double-cross) rather than mutating the board.
 local function findHotComponent(board)
+    local _t = Ai.debugLogging and profClock() or nil
     local boxEdges    = board.boxEdges
     local edgeBoxes   = board.edgeBoxes
     local edgesFilled = board.edgesFilled
@@ -532,7 +648,13 @@ local function findHotComponent(board)
     for b = 1, numBoxes do
         if fillCount(b) == 3 then seed = b; break end
     end
-    if not seed then return 0, nil end
+    if not seed then
+        if _t then
+            profHotS     = profHotS + (profClock() - _t)
+            profHotCalls = profHotCalls + 1
+        end
+        return 0, nil
+    end
 
     -- Walk every 2- or 3-filled box reachable through still-empty shared edges.
     local hot = { [seed] = true }
@@ -561,6 +683,10 @@ local function findHotComponent(board)
                 end
             end
         end
+    end
+    if _t then
+        profHotS     = profHotS + (profClock() - _t)
+        profHotCalls = profHotCalls + 1
     end
     return count, hot
 end
@@ -617,7 +743,7 @@ local function evaluateTerminal(board)
     local hotLen, hotBoxes = findHotComponent(board)
 
     local startMs = Ai.debugLogging and nowMs() or nil
-    local comps = Components.collectCold(board, hotBoxes)
+    local comps = Components.cold(board, hotBoxes)
     local coldValue = 0
     if #comps > 0 then
         coldValue = endgameFuture(comps)
@@ -724,7 +850,7 @@ function Expert.chooseMove(board, snapshot)
         for _, e in ipairs(snapshot.closers) do closerLookup[e] = true end
 
         local dxCandidates = {}
-        local comps = Components.collectCold(board)
+        local comps = Components.cold(board)
         for _, comp in ipairs(comps) do
             if comp.entryEdges and #comp.entryEdges >= 2 then
                 local hasCloserEntry, nonCloserEntries = false, {}
@@ -810,7 +936,7 @@ function Expert.chooseMove(board, snapshot)
         for _, e in ipairs(snapshot.safes) do safeLookup[e] = true end
 
         local sacrifices = {}
-        local comps = Components.collectCold(board)
+        local comps = Components.cold(board)
         for _, comp in ipairs(comps) do
             if comp.edge and not safeLookup[comp.edge] then
                 sacrifices[#sacrifices + 1] = { edge = comp.edge, len = comp.len }
@@ -1036,6 +1162,10 @@ function Ai.beginChooseMove(board)
     solveMemo = {}
     if dotsai and dotsai.solve_reset then dotsai.solve_reset() end
     profSolveCalls, profSolveTotalMs, profSolveFirstMs, profApplyCalls = 0, 0, 0, 0
+    profApplyS = 0
+    profClassifyCalls, profClassifyS = 0, 0
+    profColdCalls, profColdS = 0, 0
+    profHotCalls, profHotS = 0, 0
     runtime.board   = board
     runtime.startMs = nowMs()
     local range = MIN_DELAY_RANGE[Ai.difficulty] or { 0, 0 }
@@ -1072,13 +1202,16 @@ function Ai.tick()
                 local free = #b:listFreeEdges()
                 local kernel = (dotsai and dotsai.solve) and "C" or "L"
                 print(string.format(
-                    "[AI %s] %s %dx%d  edge=%s  think=%dms  apply=%d  solve=%d(total=%dms,first=%dms)  free=%d  heap=%.1fKB",
+                    "[AI %s] %s %dx%d  edge=%s  think=%dms  apply=%d/%.1fms  classify=%d/%.1fms  cold=%d/%.1fms  hot=%d/%.1fms  solve=%d/%dms(first=%dms)  free=%d  heap=%.1fKB",
                     kernel,
                     Ai.difficulty, b.DOTS, b.DOTS,
                     tostring(runtime.result),
                     thinkMs,
-                    profApplyCalls,
-                    profSolveCalls, profSolveTotalMs, profSolveFirstMs,
+                    profApplyCalls,    profApplyS    * 1000,
+                    profClassifyCalls, profClassifyS * 1000,
+                    profColdCalls,     profColdS     * 1000,
+                    profHotCalls,      profHotS      * 1000,
+                    profSolveCalls,    profSolveTotalMs, profSolveFirstMs,
                     free,
                     collectgarbage("count")
                 ))
