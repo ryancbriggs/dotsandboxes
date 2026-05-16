@@ -148,7 +148,7 @@ local function tickAI()
 
     local done, move = Ai.tick()
     if done and move then
-        local claimed = ui.board:playEdge(move)
+        local claimed = ui.board:playEdge(move, true)
         if claimed and claimed > 0 then
             sound.done(ui.board.chainLen - 1)
             lastAIClaimMs = playdate.getCurrentTimeMilliseconds()
@@ -209,6 +209,7 @@ end
 local function recordIfFinished()
     local board = ui and ui.board
     if not board or not board:isGameOver() or board.recorded then return end
+    local p1, p2 = board.score[1], board.score[2]
 
     local newBadges = Stats.recordGame(board, {
         mode           = ui.mode,
@@ -216,6 +217,14 @@ local function recordIfFinished()
         startingPlayer = board.startingPlayer or 1,
     })
     ui.newBadges = newBadges
+
+    local result = "draw"
+    if p1 > p2 then
+        result = "win"
+    elseif p2 > p1 then
+        result = "loss"
+    end
+    sound.gameOver(result)
 end
 
 -- ---------------------------------------------------------------------------

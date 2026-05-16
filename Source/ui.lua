@@ -1,6 +1,7 @@
 -- ui.lua  – centred board, 3‑column layout with pulsing side‑column scores
 import "CoreLibs/graphics"
 import "CoreLibs/sprites"
+import "CoreLibs/crank"
 
 import "focus"
 local Focus <const> = Focus
@@ -19,6 +20,8 @@ UI.DOT_SIZE = DOT_SIZE            -- for external use
 -- Box-claim animation (expand-and-settle) ----------------------------------
 local CLAIM_ANIM_MS    <const> = 260    -- total duration in milliseconds
 local CLAIM_OVERSHOOT  <const> = 1.25   -- scale at the peak of the pop
+local REPLAY_TICKS_PER_REV <const> = 24
+local REPLAY_TICKS_PER_MOVE <const> = 2
 
 -------------------------------------------------------------------------------
 -- Build reverse look‑up for boxes (edge lookup lives on the board)
@@ -56,11 +59,18 @@ local function drawThickLine(x1, y1, x2, y2)
     end
 end
 
+local function stateFor(self)
+    if self.replayActive and self.replayState then
+        return self.replayState
+    end
+    return self.board
+end
+
 -------------------------------------------------------------------------------
 -- Cursor highlight box (transparent center, tinted by player)
 -------------------------------------------------------------------------------
-function UI:drawCursor()
-    local coords = self.board.edgeToCoord[self.cursorEdge]
+function UI:drawCursor(edge, owner)
+    local coords = self.board.edgeToCoord[edge or self.cursorEdge]
     if not coords then return end
     local rr, cc, dir = table.unpack(coords)
     local x1, y1 = dotXY(self, rr, cc)
@@ -94,7 +104,8 @@ function UI:drawCursor()
     end
     local s = self.cursorAnim
 
-    if self.board.currentPlayer == 1 then
+    owner = owner or self.board.currentPlayer
+    if owner == 1 then
         gfx.setColor(gfx.kColorBlack)
     else
         gfx.setDitherPattern(0.5)
@@ -137,6 +148,10 @@ function UI.new(board, opts)
     -- Cursor
     self.cursorEdge = 1
     self.cursorAnim = nil   -- eased highlight rect; snaps fresh each game
+    self.replayActive = false
+    self.replayIndex = nil
+    self.replayState = nil
+    self.replayTickRemainder = 0
     -- Per-box claim-animation start times (boxId -> ms timestamp)
     self.boxAnimStart = {}
     playdate.display.setRefreshRate(20)
@@ -148,6 +163,39 @@ end
 -------------------------------------------------------------------------------
 function UI:handleInput()
     if self.board:isGameOver() then
+        local ticks = playdate.getCrankTicks(REPLAY_TICKS_PER_REV)
+        if ticks ~= 0 and self.board.history and #self.board.history > 0 then
+            if not self.replayActive then
+                self.replayActive = true
+                self.replayIndex = #self.board.history
+                self.replayState = self.board.history[self.replayIndex]
+                self.replayTickRemainder = 0
+            end
+
+            self.replayTickRemainder = self.replayTickRemainder + ticks
+            local steps = 0
+            if self.replayTickRemainder >= REPLAY_TICKS_PER_MOVE then
+                steps = math.floor(self.replayTickRemainder / REPLAY_TICKS_PER_MOVE)
+            elseif self.replayTickRemainder <= -REPLAY_TICKS_PER_MOVE then
+                steps = math.ceil(self.replayTickRemainder / REPLAY_TICKS_PER_MOVE)
+            end
+
+            if steps ~= 0 then
+                self.replayTickRemainder = self.replayTickRemainder - steps * REPLAY_TICKS_PER_MOVE
+                local before = self.replayIndex
+                self.replayIndex = self.replayIndex + steps
+                if self.replayIndex < 1 then self.replayIndex = 1 end
+                if self.replayIndex > #self.board.history then
+                    self.replayIndex = #self.board.history
+                end
+                self.replayState = self.board.history[self.replayIndex]
+                self.cursorAnim = nil
+                if self.sound and before ~= self.replayIndex then
+                    self.sound.reviewStep()
+                end
+            end
+        end
+
         if playdate.buttonJustPressed(playdate.kButtonA) then
             self.onRestart()
         elseif playdate.buttonJustPressed(playdate.kButtonB) and self.onMainMenu then
@@ -176,7 +224,7 @@ function UI:handleInput()
 
     if playdate.buttonJustPressed(playdate.kButtonA) then
         if self.mode ~= "pvc" or self.board.currentPlayer == 1 then
-            local claimed = self.board:playEdge(self.cursorEdge)
+            local claimed = self.board:playEdge(self.cursorEdge, true)
             if claimed and claimed > 0 and self.sound then
                 self.sound.done(self.board.chainLen - 1)
             end
@@ -202,7 +250,8 @@ end
 function UI:draw()
     gfx.setColor(gfx.kColorBlack)
 
-    local p1Score, p2Score = self.board.score[1], self.board.score[2]
+    local view = stateFor(self)
+    local p1Score, p2Score = view.score[1], view.score[2]
 
     -- Dots
     for rr=1,self.board.DOTS do
@@ -214,13 +263,13 @@ function UI:draw()
 
     -- Edges
     for e = 1, #self.board.edgeToCoord do
-        if self.board:edgeIsFilled(e) then
+        if view.edgesFilled[e] then
             local rr, cc, d = table.unpack(self.board.edgeToCoord[e])
             local x1, y1 = dotXY(self, rr, cc)
             local x2, y2
             if d == self.board.H then x2,y2 = dotXY(self, rr, cc+1)
             else x2,y2 = dotXY(self, rr+1, cc) end
-            local owner = self.board.edgeOwner[e] or 1
+            local owner = view.edgeOwner[e] or 1
             gfx.setDitherPattern(owner==2 and 0.5 or 0)
             drawThickLine(x1,y1,x2,y2)
             gfx.setDitherPattern(0)
@@ -231,24 +280,26 @@ function UI:draw()
     local nowMs = playdate.getCurrentTimeMilliseconds()
     local baseSize = math.floor(self.spacing * 0.5)
     for id, bc in ipairs(self.boxToCoord) do
-        local owner = self.board.boxOwner[id]
+        local owner = view.boxOwner[id]
         if owner then
-            local startMs = self.boxAnimStart[id]
-            if not startMs then
-                startMs = nowMs
-                self.boxAnimStart[id] = startMs
-            end
+            local scale = 1
+            if not self.replayActive then
+                local startMs = self.boxAnimStart[id]
+                if not startMs then
+                    startMs = nowMs
+                    self.boxAnimStart[id] = startMs
+                end
 
-            local progress = (nowMs - startMs) / CLAIM_ANIM_MS
-            if progress < 0 then progress = 0
-            elseif progress > 1 then progress = 1 end
+                local progress = (nowMs - startMs) / CLAIM_ANIM_MS
+                if progress < 0 then progress = 0
+                elseif progress > 1 then progress = 1 end
 
-            -- Piecewise scale: 0 → overshoot in first half, overshoot → 1.0 in second.
-            local scale
-            if progress < 0.5 then
-                scale = progress * 2 * CLAIM_OVERSHOOT
-            else
-                scale = CLAIM_OVERSHOOT - (progress - 0.5) * 2 * (CLAIM_OVERSHOOT - 1)
+                -- Piecewise scale: 0 -> overshoot in first half, overshoot -> 1.0 in second.
+                if progress < 0.5 then
+                    scale = progress * 2 * CLAIM_OVERSHOOT
+                else
+                    scale = CLAIM_OVERSHOOT - (progress - 0.5) * 2 * (CLAIM_OVERSHOOT - 1)
+                end
             end
 
             local size = math.floor(baseSize * scale)
@@ -267,7 +318,13 @@ function UI:draw()
     end
 
     -- Cursor
-    self:drawCursor()
+    if self.replayActive then
+        if view.moveEdge then
+            self:drawCursor(view.moveEdge, view.movePlayer)
+        end
+    else
+        self:drawCursor()
+    end
 
     -- Side‑column scores
     do
@@ -343,7 +400,16 @@ function UI:draw()
     end
 
     -- Game‑over
-    if self.board:isGameOver() then
+    if self.replayActive then
+        local F = self.fonts or {}
+        local fC = F.caption or gfx.getSystemFont()
+        local sw, sh = playdate.display.getSize()
+        local moveCount = self.board.history and (#self.board.history - 1) or 0
+        local moveIndex = math.max(0, (self.replayIndex or #self.board.history) - 1)
+        local text = string.format("Review  %d/%d    A: play again   B: menu", moveIndex, moveCount)
+        gfx.setFont(fC)
+        gfx.drawText(text, math.floor((sw - fC:getTextWidth(text)) / 2), sh - fC:getHeight() - 2)
+    elseif self.board:isGameOver() then
         local F   = self.fonts or {}
         local sys = gfx.getSystemFont()
         local fH1, fH2  = F.h1 or sys, F.h2 or sys
@@ -390,7 +456,7 @@ function UI:draw()
         lines[#lines + 1] = { winnerLine,                   fH2 }
         lines[#lines + 1] = { chainLine,                    fBody }
         lines[#lines + 1] = { timeLine,                     fBody }
-        lines[#lines + 1] = { "(A: play again   B: menu)",  fC }
+        lines[#lines + 1] = { "(Crank: review   A: play again   B: menu)",  fC }
 
         local maxW, totalH = 0, 0
         local rowH = {}

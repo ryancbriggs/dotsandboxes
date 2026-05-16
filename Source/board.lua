@@ -75,6 +75,8 @@ function Board.new(dots)
     self.longestChain  = { 0, 0 }         -- best chainLen reached per player
     self.startMs       = playdate.getCurrentTimeMilliseconds()
     self.endMs         = nil
+    self.history       = {}
+    self:recordHistory(nil, nil, 0)
 
     return self
 end
@@ -88,13 +90,37 @@ function Board:isGameOver()
     return (self.score[1] + self.score[2]) == #self.boxEdges
 end
 
+function Board:recordHistory(edge, player, claimed)
+    local snap = {
+        moveEdge      = edge,
+        movePlayer    = player,
+        claimed       = claimed or 0,
+        currentPlayer = self.currentPlayer,
+        score         = { self.score[1], self.score[2] },
+        edgesFilled   = {},
+        edgeOwner     = {},
+        boxOwner      = {},
+    }
+
+    for e in pairs(self.edgesFilled) do
+        snap.edgesFilled[e] = true
+        snap.edgeOwner[e] = self.edgeOwner[e]
+    end
+    for b, owner in pairs(self.boxOwner) do
+        snap.boxOwner[b] = owner
+    end
+
+    self.history[#self.history + 1] = snap
+end
+
 -------------------------------------------------------------------------------
 -- Play an edge ---------------------------------------------------------------
 -------------------------------------------------------------------------------
-function Board:playEdge(e)
+function Board:playEdge(e, recordHistory)
     if self.edgesFilled[e] then return nil end
+    local player = self.currentPlayer
     self.edgesFilled[e] = true
-    self.edgeOwner[e]   = self.currentPlayer
+    self.edgeOwner[e]   = player
 
     local claimed = 0
     if self.edgeBoxes[e] then
@@ -126,6 +152,9 @@ function Board:playEdge(e)
     end
     if self:isGameOver() and not self.endMs then
         self.endMs = playdate.getCurrentTimeMilliseconds()
+    end
+    if recordHistory then
+        self:recordHistory(e, player, claimed)
     end
     return claimed
 end
