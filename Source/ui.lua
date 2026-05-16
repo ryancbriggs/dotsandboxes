@@ -319,7 +319,9 @@ function UI:draw()
             -- The whole tube (outline + fill) is 50% gray on the P2/CPU side.
             local tubeX = colCx - TUBE_W / 2
             gfx.setDitherPattern(dither and 0.5 or 0)
+            gfx.setLineWidth(2)
             gfx.drawRect(tubeX, TUBE_TOP, TUBE_W, TUBE_H)
+            gfx.setLineWidth(1)
             local frac  = total > 0 and (score / total) or 0
             local fillH = math.floor((TUBE_H - 2) * frac)
             if fillH > 0 then
