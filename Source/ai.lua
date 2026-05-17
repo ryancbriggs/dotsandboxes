@@ -410,13 +410,20 @@ function Heuristics.scoreSafeEdge(board, edge)
     return bonus + maxFilled
 end
 
--- Tuple comparator used by Hard / Expert when scores tie.
---   (rawScore, staticHeuristic, -edgeId) — higher tuple wins.
-function Heuristics.beatsBest(score, h, edge, bestScore, bestH, bestEdge)
-    if not bestEdge then return true end
-    if score ~= bestScore then return score > bestScore end
-    if h ~= bestH then return h > bestH end
-    return edge < bestEdge
+-- Random tie-break among evaluated candidates with the same top primary score.
+-- Callers decide the candidate set; this helper never selects a lower-scored move.
+function Heuristics.pickRandomBestByScore(candidates)
+    local bestScore, best = -math.huge, {}
+    for _, candidate in ipairs(candidates) do
+        local score = candidate.score
+        if score > bestScore then
+            bestScore, best = score, { candidate }
+        elseif score == bestScore then
+            best[#best + 1] = candidate
+        end
+    end
+    if #best == 0 then return nil, bestScore end
+    return best[math.random(#best)], bestScore
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -700,33 +707,40 @@ end
 -- their only move closes both boxes. Without this check the Berlekamp
 -- formula would happily apply `dx = hotLen-4-cv` and conclude the consumer
 -- can hand the domino back — they can't.
-local function hotCanDX(board, hotBoxes)
+local function hotDXCandidates(board, hotBoxes)
     local edgesFilled = board.edgesFilled
     local boxEdges    = board.boxEdges
     local edgeBoxes   = board.edgeBoxes
     local seenEdges   = {}
-    for boxId in pairs(hotBoxes) do
-        local edges = boxEdges[boxId]
-        for j = 1, #edges do
-            local e = edges[j]
-            if not edgesFilled[e] and not seenEdges[e] then
-                seenEdges[e] = true
-                local adj = edgeBoxes[e] or {}
-                local closes = false
-                for k = 1, #adj do
-                    local nb = adj[k]
-                    local fc = 0
-                    local nbEdges = boxEdges[nb]
-                    for m = 1, #nbEdges do
-                        if edgesFilled[nbEdges[m]] then fc = fc + 1 end
+    local candidates  = {}
+    for boxId = 1, #boxEdges do
+        if hotBoxes[boxId] then
+            local edges = boxEdges[boxId]
+            for j = 1, #edges do
+                local e = edges[j]
+                if not edgesFilled[e] and not seenEdges[e] then
+                    seenEdges[e] = true
+                    local adj = edgeBoxes[e] or {}
+                    local closes = false
+                    for k = 1, #adj do
+                        local nb = adj[k]
+                        local fc = 0
+                        local nbEdges = boxEdges[nb]
+                        for m = 1, #nbEdges do
+                            if edgesFilled[nbEdges[m]] then fc = fc + 1 end
+                        end
+                        if fc == 3 then closes = true; break end
                     end
-                    if fc == 3 then closes = true; break end
+                    if not closes then candidates[#candidates + 1] = e end
                 end
-                if not closes then return true end
             end
         end
     end
-    return false
+    return candidates
+end
+
+local function hotCanDX(board, hotBoxes)
+    return #hotDXCandidates(board, hotBoxes) > 0
 end
 
 -- The static evaluator. Returns the value of the position to the CURRENT
@@ -847,7 +861,25 @@ function Expert.chooseMove(board, snapshot)
         local closerLookup = {}
         for _, e in ipairs(snapshot.closers) do closerLookup[e] = true end
 
-        local dxCandidates = {}
+        local dxCandidates, seenDX = {}, {}
+        local function addDXCandidate(e)
+            if not seenDX[e] then
+                dxCandidates[#dxCandidates + 1] = e
+                seenDX[e] = true
+            end
+        end
+
+        -- The current hot chain itself can contain the actual double-cross
+        -- move: a non-closing edge inside the hot region. Those edges are not
+        -- part of Components.cold(board), so include them explicitly and score
+        -- them before capped cold-entry candidates.
+        local hotLen, hotBoxes = findHotComponent(board)
+        if hotLen >= 2 and hotBoxes then
+            for _, e in ipairs(hotDXCandidates(board, hotBoxes)) do
+                addDXCandidate(e)
+            end
+        end
+
         local comps = Components.cold(board)
         for _, comp in ipairs(comps) do
             if comp.entryEdges and #comp.entryEdges >= 2 then
@@ -861,7 +893,7 @@ function Expert.chooseMove(board, snapshot)
                 end
                 if hasCloserEntry then
                     for _, e in ipairs(nonCloserEntries) do
-                        dxCandidates[#dxCandidates + 1] = e
+                        addDXCandidate(e)
                     end
                 end
             end
@@ -923,11 +955,14 @@ function Expert.chooseMove(board, snapshot)
 
         local safeBestEdge, safeBestScore = nil, -math.huge
         local safeCandidates = selectTopSafes(board, snapshot.safes, SAFE_EVAL_LIMIT)
+        local safeEvaluations = {}
         for _, edge in ipairs(safeCandidates) do
             local sc = evaluateSafeEdge(edge)
-            if sc > safeBestScore then
-                safeBestScore, safeBestEdge = sc, edge
-            end
+            safeEvaluations[#safeEvaluations + 1] = { edge = edge, score = sc }
+        end
+        local safeBest = Heuristics.pickRandomBestByScore(safeEvaluations)
+        if safeBest then
+            safeBestScore, safeBestEdge = safeBest.score, safeBest.edge
         end
 
         local safeLookup = {}
@@ -1002,10 +1037,9 @@ function Hard.chooseMove(board, snapshot)
         local depth = (board.DOTS <= HARD_DEPTH2_MAX_DOTS) and 2 or 1
         local candidates = selectTopSafes(board, snapshot.safes, HARD_SAFE_LIMIT)
 
-        local bestEdge, bestScore, bestH = nil, -math.huge, -math.huge
+        local evaluations = {}
         for _, edge in ipairs(candidates) do
             yieldIfBudgetExceeded()
-            local hStatic = Heuristics.scoreSafeEdge(board, edge)
             local state = applyMove(board, edge)
             local score = evaluateForPlayer(board, rootPlayer)
             if depth >= 2 then
@@ -1024,11 +1058,10 @@ function Hard.chooseMove(board, snapshot)
             end
             undoMove(board, state)
 
-            if Heuristics.beatsBest(score, hStatic, edge, bestScore, bestH, bestEdge) then
-                bestScore, bestH, bestEdge = score, hStatic, edge
-            end
+            evaluations[#evaluations + 1] = { edge = edge, score = score }
         end
-        if bestEdge then return bestEdge end
+        local best = Heuristics.pickRandomBestByScore(evaluations)
+        if best then return best.edge end
     end
 
     return Endgame.negamaxSolver(board, snapshot)
