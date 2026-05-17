@@ -426,6 +426,23 @@ function Heuristics.pickRandomBestByScore(candidates)
     return best[math.random(#best)], bestScore
 end
 
+-- Edge centrality: higher score = closer to the board's geometric center.
+-- Used by Medium directly, and by Expert as one ingredient in its aggression
+-- personality.
+local function centralityScore(board, edge)
+    local coords = board.edgeToCoord[edge]
+    local r, c, d = coords[1], coords[2], coords[3]
+    local ey, ex
+    if d == board.H then
+        ey, ex = r, c + 0.5
+    else
+        ey, ex = r + 0.5, c
+    end
+    local mid = (board.DOTS + 1) / 2
+    local dy, dx = ey - mid, ex - mid
+    return -(dy * dy + dx * dx)
+end
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 4. ENDGAME SOLVERS
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -817,12 +834,119 @@ local function evaluateForPlayer(board, rootPlayer)
 end
 
 local SAFE_EVAL_LIMIT     <const> = 4
+local SAFE_AGGRO_LIMIT    <const> = 2
+local AGGRESSION_TEMP     <const> = 2.0
 local CLOSER_EVAL_LIMIT   <const> = 5
 local SAFE_DEPTH_LIMIT    <const> = 2
 local SAFE_DEPTH_MAX_DOTS <const> = 6
 local SACRIFICE_LIMIT     <const> = 4    -- a touch wider than the original 3
 local SACRIFICE_THRESHOLD <const> = 0.75
 local SACRIFICE_SAFE_CAP  <const> = 2
+
+local function minMaxScale(value, minValue, maxValue)
+    if maxValue <= minValue then return 0.5 end
+    return (value - minValue) / (maxValue - minValue)
+end
+
+local function expertAggressionFeatures(board, edge)
+    local pressure = 0
+    for _, boxId in ipairs(board.edgeBoxes[edge] or {}) do
+        if EdgeUtils.countFilled(board, board.boxEdges[boxId]) == 1 then
+            pressure = pressure + 1
+        end
+    end
+    return {
+        centrality = centralityScore(board, edge),
+        pressure   = pressure,
+        border     = (#(board.edgeBoxes[edge] or {}) == 1) and 1 or 0
+    }
+end
+
+local function attachExpertAggressionScores(board, candidates)
+    local mins, maxs = {}, {}
+    for _, candidate in ipairs(candidates) do
+        local features = expertAggressionFeatures(board, candidate.edge)
+        candidate.aggressionFeatures = features
+        for k, v in pairs(features) do
+            mins[k] = mins[k] and math.min(mins[k], v) or v
+            maxs[k] = maxs[k] and math.max(maxs[k], v) or v
+        end
+    end
+
+    for _, candidate in ipairs(candidates) do
+        local features = candidate.aggressionFeatures
+        local centrality = minMaxScale(features.centrality, mins.centrality, maxs.centrality)
+        local pressure   = minMaxScale(features.pressure,   mins.pressure,   maxs.pressure)
+        local border     = minMaxScale(features.border,     mins.border,     maxs.border)
+        candidate.aggression = 0.7 * centrality
+                             + 0.4 * pressure
+                             - 0.2 * border
+    end
+end
+
+local function addUniqueEdge(edges, seen, edge)
+    if not seen[edge] then
+        edges[#edges + 1] = edge
+        seen[edge] = true
+    end
+end
+
+local function selectExpertSafes(board, safes)
+    local selected, seen = {}, {}
+    for _, edge in ipairs(selectTopSafes(board, safes, SAFE_EVAL_LIMIT)) do
+        addUniqueEdge(selected, seen, edge)
+    end
+
+    local aggressiveCandidates = {}
+    for _, edge in ipairs(safes) do
+        aggressiveCandidates[#aggressiveCandidates + 1] = { edge = edge }
+    end
+    attachExpertAggressionScores(board, aggressiveCandidates)
+    table.sort(aggressiveCandidates, function(a, b)
+        return a.aggression > b.aggression
+    end)
+
+    for i = 1, math.min(SAFE_AGGRO_LIMIT, #aggressiveCandidates) do
+        addUniqueEdge(selected, seen, aggressiveCandidates[i].edge)
+    end
+    return selected
+end
+
+local function pickExpertAggressiveTie(board, candidates)
+    local bestScore = -math.huge
+    for _, candidate in ipairs(candidates) do
+        if candidate.score > bestScore then bestScore = candidate.score end
+    end
+
+    local pool = {}
+    for _, candidate in ipairs(candidates) do
+        if candidate.score == bestScore then
+            pool[#pool + 1] = candidate
+        end
+    end
+    if #pool <= 1 then return pool[1], bestScore end
+
+    attachExpertAggressionScores(board, pool)
+    local maxAggression = -math.huge
+    for _, candidate in ipairs(pool) do
+        if candidate.aggression > maxAggression then
+            maxAggression = candidate.aggression
+        end
+    end
+
+    local total = 0
+    for _, candidate in ipairs(pool) do
+        candidate.weight = math.exp((candidate.aggression - maxAggression) / AGGRESSION_TEMP)
+        total = total + candidate.weight
+    end
+
+    local draw = math.random() * total
+    for _, candidate in ipairs(pool) do
+        draw = draw - candidate.weight
+        if draw <= 0 then return candidate, bestScore end
+    end
+    return pool[#pool], bestScore
+end
 
 function Expert.chooseMove(board, snapshot)
     snapshot = snapshot or EdgeUtils.classify(board)
@@ -954,13 +1078,13 @@ function Expert.chooseMove(board, snapshot)
         end
 
         local safeBestEdge, safeBestScore = nil, -math.huge
-        local safeCandidates = selectTopSafes(board, snapshot.safes, SAFE_EVAL_LIMIT)
+        local safeCandidates = selectExpertSafes(board, snapshot.safes)
         local safeEvaluations = {}
         for _, edge in ipairs(safeCandidates) do
             local sc = evaluateSafeEdge(edge)
             safeEvaluations[#safeEvaluations + 1] = { edge = edge, score = sc }
         end
-        local safeBest = Heuristics.pickRandomBestByScore(safeEvaluations)
+        local safeBest = pickExpertAggressiveTie(board, safeEvaluations)
         if safeBest then
             safeBestScore, safeBestEdge = safeBest.score, safeBest.edge
         end
@@ -1104,22 +1228,6 @@ end
 -- ═══════════════════════════════════════════════════════════════════════════
 
 local Strategies = {}
-
--- Edge centrality: higher score = closer to the board's geometric center.
--- Used by Medium to give it a "bold, plays in the middle" personality.
-local function centralityScore(board, edge)
-    local coords = board.edgeToCoord[edge]
-    local r, c, d = coords[1], coords[2], coords[3]
-    local ey, ex
-    if d == board.H then
-        ey, ex = r, c + 0.5
-    else
-        ey, ex = r + 0.5, c
-    end
-    local mid = (board.DOTS + 1) / 2
-    local dy, dx = ey - mid, ex - mid
-    return -(dy * dy + dx * dx)
-end
 
 Strategies.easy = StrategyUtils.withBlunder(function(board)
     local snapshot = EdgeUtils.classify(board)
