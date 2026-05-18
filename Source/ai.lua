@@ -26,7 +26,7 @@ local profClassifyS    = 0   -- EdgeUtils.classify
 local profColdCalls    = 0
 local profColdS        = 0   -- Components.collectCold
 local profHotCalls     = 0
-local profHotS         = 0   -- findHotComponent
+local profHotS         = 0   -- collectHotComponents
 
 local function profClock() return playdate.getElapsedTime() end
 
@@ -291,6 +291,7 @@ end
 -- Persistent memo for solveComponents — cleared in Ai.beginChooseMove and at
 -- the top of each synchronous Ai.chooseMove call.
 local solveMemo = {}
+local captureMemo = {}
 
 -- Single source of truth for the value, to the player who OPENS one
 -- component of `len` boxes, of that choice. `nextVal` is the solveComponents
@@ -637,15 +638,11 @@ local function undoMove(board, state)
     if _t then profApplyS = profApplyS + (profClock() - _t) end
 end
 
--- Find any active "hot" component (chain or loop with a 3-filled box).
--- Returns (len, boxSet) where len is the total number of boxes in the
--- component and boxSet is a {[boxId]=true} map of its members. If there's
--- no 3-filled box, returns (0, nil).
---
--- This is the seed for evaluateTerminal's Berlekamp-style consumption: the
--- current player will consume this component, and we compute their value
--- analytically (greedy vs double-cross) rather than mutating the board.
-local function findHotComponent(board)
+-- Find every active "hot" component: connected 2-/3-sided boxes containing
+-- at least one 3-sided box. Capture evaluation must consider all of them;
+-- treating only the first hot area as active can misclassify another live
+-- closer as cold and badly overrate fake double-crosses.
+local function collectHotComponents(board)
     local _t = Ai.debugLogging and profClock() or nil
     local boxEdges    = board.boxEdges
     local edgeBoxes   = board.edgeBoxes
@@ -665,52 +662,51 @@ local function findHotComponent(board)
         return c
     end
 
-    -- Find any 3-filled box to seed the BFS.
-    local seed
-    for b = 1, numBoxes do
-        if fillCount(b) == 3 then seed = b; break end
-    end
-    if not seed then
-        if _t then
-            profHotS     = profHotS + (profClock() - _t)
-            profHotCalls = profHotCalls + 1
-        end
-        return 0, nil
-    end
+    local comps, seen = {}, {}
+    for seed = 1, numBoxes do
+        if not seen[seed] and fillCount(seed) == 3 then
+            local hot = { [seed] = true }
+            local count = 1
+            local stack = { seed }
+            seen[seed] = true
 
-    -- Walk every 2- or 3-filled box reachable through still-empty shared edges.
-    local hot = { [seed] = true }
-    local count = 1
-    local stack = { seed }
-    while #stack > 0 do
-        local cur = stack[#stack]
-        stack[#stack] = nil
-        local edges = boxEdges[cur]
-        for j = 1, #edges do
-            local e = edges[j]
-            if not edgesFilled[e] then
-                local adj = edgeBoxes[e]
-                if adj then
-                    for k = 1, #adj do
-                        local nb = adj[k]
-                        if not hot[nb] then
-                            local f = fillCount(nb)
-                            if f == 2 or f == 3 then
-                                hot[nb] = true
-                                count = count + 1
-                                stack[#stack + 1] = nb
+            -- Walk every 2- or 3-filled box reachable through unfilled shared
+            -- edges. Multiple 3-sided boxes in the same region are one hot
+            -- component; disconnected 3-sided boxes become separate components.
+            while #stack > 0 do
+                local cur = stack[#stack]
+                stack[#stack] = nil
+                local edges = boxEdges[cur]
+                for j = 1, #edges do
+                    local e = edges[j]
+                    if not edgesFilled[e] then
+                        local adj = edgeBoxes[e]
+                        if adj then
+                            for k = 1, #adj do
+                                local nb = adj[k]
+                                if not seen[nb] then
+                                    local f = fillCount(nb)
+                                    if f == 2 or f == 3 then
+                                        seen[nb] = true
+                                        hot[nb] = true
+                                        count = count + 1
+                                        stack[#stack + 1] = nb
+                                    end
+                                end
                             end
                         end
                     end
                 end
             end
+            comps[#comps + 1] = { len = count, boxes = hot }
         end
     end
+
     if _t then
         profHotS     = profHotS + (profClock() - _t)
         profHotCalls = profHotCalls + 1
     end
-    return count, hot
+    return comps
 end
 
 -- Whether the consumer of `hotBoxes` has a non-claiming move available
@@ -756,23 +752,71 @@ local function hotDXCandidates(board, hotBoxes)
     return candidates
 end
 
-local function hotCanDX(board, hotBoxes)
-    return #hotDXCandidates(board, hotBoxes) > 0
+local function addHotDXCandidates(board, candidates, seen)
+    for _, comp in ipairs(collectHotComponents(board)) do
+        if comp.len >= 2 then
+            for _, edge in ipairs(hotDXCandidates(board, comp.boxes)) do
+                if not seen[edge] then
+                    candidates[#candidates + 1] = edge
+                    seen[edge] = true
+                end
+            end
+        end
+    end
 end
 
--- The static evaluator. Returns the value of the position to the CURRENT
--- player (whoever is about to move). If the position has an active hot
--- chain, applies the Berlekamp formula (greedy vs double-cross) to model
--- optimal consumption. Otherwise just scores by cold-component analysis.
-local function evaluateTerminal(board)
-    if board:isGameOver() then
-        return scoreDiff(board)
+local function onlyHotCapturesRemain(board)
+    local hotComps = collectHotComponents(board)
+    if #hotComps == 0 then return false end
+
+    local excluded = {}
+    for _, comp in ipairs(hotComps) do
+        for boxId in pairs(comp.boxes) do
+            excluded[boxId] = true
+        end
     end
+    return #Components.cold(board, excluded) == 0
+end
 
-    local hotLen, hotBoxes = findHotComponent(board)
+local function collectClosers(board)
+    local closers, seen = {}, {}
+    local boxEdges = board.boxEdges
+    local edgesFilled = board.edgesFilled
+    for boxId = 1, #boxEdges do
+        local edges = boxEdges[boxId]
+        local filled, freeEdge = 0, nil
+        for i = 1, #edges do
+            local edge = edges[i]
+            if edgesFilled[edge] then
+                filled = filled + 1
+            else
+                freeEdge = edge
+            end
+        end
+        if filled == 3 and freeEdge and not seen[freeEdge] then
+            closers[#closers + 1] = freeEdge
+            seen[freeEdge] = true
+        end
+    end
+    return closers
+end
 
+local function captureKey(board, allowDX)
+    local bytes = {
+        allowDX and 1 or 0,
+        board.currentPlayer,
+        board.score[1],
+        board.score[2]
+    }
+    for edge = 1, #board.edgeToCoord do
+        bytes[#bytes + 1] = board.edgesFilled[edge] and 1 or 0
+    end
+    return string.char(table.unpack(bytes))
+end
+
+local function evaluateColdTerminal(board)
     local startMs = Ai.debugLogging and nowMs() or nil
-    local comps = Components.cold(board, hotBoxes)
+    local comps = Components.cold(board)
     local coldValue = 0
     if #comps > 0 then
         coldValue = endgameFuture(comps)
@@ -784,27 +828,80 @@ local function evaluateTerminal(board)
         if profSolveCalls == 1 then profSolveFirstMs = elapsed end
     end
 
-    if hotLen > 0 then
-        -- Current player consumes the hot component. Two options:
-        --   greedy: take all hotLen boxes, then play into cold rest as mover.
-        --   double-cross (hotLen >= 2 AND a non-claiming hot move exists):
-        --     take hotLen-2, give opp 2-domino, flip turn so opp plays cold.
-        -- Mover picks whichever maximizes their value. The geometric DX gate
-        -- (hotCanDX) is required: e.g. a "ready 2-domino" (both boxes 3-sided,
-        -- one unfilled edge between them) has no DX move available — the
-        -- consumer is forced to take it greedily.
-        local greedy = hotLen + coldValue
-        local mover
-        if hotLen >= 2 and hotCanDX(board, hotBoxes) then
-            local dx = hotLen - 4 - coldValue
-            mover = math.max(greedy, dx)
-        else
-            mover = greedy
-        end
-        return scoreDiff(board) + mover
+    return scoreDiff(board) + coldValue
+end
+
+local function evaluateGreedyCaptures(board)
+    local states = {}
+    while not board:isGameOver() do
+        local closers = collectClosers(board)
+        if #closers == 0 then break end
+        local state = applyMove(board, closers[1])
+        if not state then break end
+        states[#states + 1] = state
     end
 
-    return scoreDiff(board) + coldValue
+    local score = board:isGameOver() and scoreDiff(board) or evaluateColdTerminal(board)
+    for i = #states, 1, -1 do
+        undoMove(board, states[i])
+    end
+    return score
+end
+
+-- Returns the value of the position to the CURRENT player. If any boxes are
+-- immediately claimable, first resolve the real capture frontier until the
+-- board is quiet. Legal double-cross moves are considered at the frontier,
+-- then the resulting forced captures are resolved greedily; this catches
+-- multi-hot sweeps without expanding every nested double-cross permutation.
+local function evaluateTerminal(board, allowDX)
+    if board:isGameOver() then
+        return scoreDiff(board)
+    end
+
+    local closers = collectClosers(board)
+    if #closers == 0 then
+        return evaluateColdTerminal(board)
+    end
+
+    local key = captureKey(board, allowDX ~= false)
+    local cached = captureMemo[key]
+    if cached ~= nil then return cached end
+
+    if allowDX == false then
+        local score = evaluateGreedyCaptures(board)
+        captureMemo[key] = score
+        return score
+    end
+
+    local rootPlayer = board.currentPlayer
+    local candidates, seen = {}, {}
+    for _, edge in ipairs(closers) do
+        candidates[#candidates + 1] = edge
+        seen[edge] = true
+    end
+    if allowDX ~= false then
+        addHotDXCandidates(board, candidates, seen)
+    end
+
+    local best = -math.huge
+    for _, edge in ipairs(candidates) do
+        yieldIfBudgetExceeded()
+        local state = applyMove(board, edge)
+        if state then
+            local score = evaluateTerminal(board, false)
+            if board.currentPlayer ~= rootPlayer then
+                score = -score
+            end
+            undoMove(board, state)
+            if score > best then best = score end
+        end
+    end
+
+    if best == -math.huge then
+        best = evaluateColdTerminal(board)
+    end
+    captureMemo[key] = best
+    return best
 end
 
 local function selectTopSafes(board, safes, limit)
@@ -953,6 +1050,10 @@ function Expert.chooseMove(board, snapshot)
     local rootPlayer = board.currentPlayer
 
     if #snapshot.closers > 0 then
+        if onlyHotCapturesRemain(board) then
+            return snapshot.closers[1]
+        end
+
         local bestEdge, bestScore = nil, -math.huge
         -- [AI DX] diagnostic logging — disabled but kept for future debugging.
         -- Re-enable by uncommenting this line and the print block below; the
@@ -997,12 +1098,7 @@ function Expert.chooseMove(board, snapshot)
         -- move: a non-closing edge inside the hot region. Those edges are not
         -- part of Components.cold(board), so include them explicitly and score
         -- them before capped cold-entry candidates.
-        local hotLen, hotBoxes = findHotComponent(board)
-        if hotLen >= 2 and hotBoxes then
-            for _, e in ipairs(hotDXCandidates(board, hotBoxes)) do
-                addDXCandidate(e)
-            end
-        end
+        addHotDXCandidates(board, dxCandidates, seenDX)
 
         local comps = Components.cold(board)
         for _, comp in ipairs(comps) do
@@ -1038,10 +1134,10 @@ function Expert.chooseMove(board, snapshot)
 
         -- [AI DX] diagnostic print — disabled, kept for future debugging.
         -- if Ai.debugLogging and dxLog and #dxLog > 0 then
-        --     local hotLen = select(1, findHotComponent(board))
+        --     local hotCount = #collectHotComponents(board)
         --     print(string.format(
         --         "[AI DX] hot=%d pick=%s score=%s closers=[%s] dx=[%s]",
-        --         hotLen, tostring(bestEdge), tostring(bestScore),
+        --         hotCount, tostring(bestEdge), tostring(bestScore),
         --         table.concat(closerLog, ","), table.concat(dxLog, ",")
         --     ))
         -- end
@@ -1278,6 +1374,7 @@ end
 -- never yield because the budget check is wrapped in a coroutine.running guard.
 function Ai.chooseMove(board)
     solveMemo = {}
+    captureMemo = {}
     return Strategies[Ai.difficulty](board)
 end
 
@@ -1300,6 +1397,7 @@ end
 function Ai.beginChooseMove(board, midChain)
     Ai.cancel()
     solveMemo = {}
+    captureMemo = {}
     if dotsai and dotsai.solve_reset then dotsai.solve_reset() end
     profSolveCalls, profSolveTotalMs, profSolveFirstMs, profApplyCalls = 0, 0, 0, 0
     profApplyS = 0
