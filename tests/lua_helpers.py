@@ -24,10 +24,14 @@ def native_solver():
         _native.test_solve.argtypes = [ctypes.c_char_p, ctypes.c_int,
                                       ctypes.c_char_p, ctypes.c_int]
         _native.test_solve.restype = ctypes.c_int
+        _native.test_cold_init.argtypes = [ctypes.c_int, ctypes.c_int,
+                                          ctypes.c_char_p, ctypes.c_char_p]
+        _native.test_cold.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p]
+        _native.test_cold.restype = ctypes.c_int
     return _native
 
 
-def game(native=False):
+def game(native=False, source=None):
     lua = LuaRuntime(unpack_returned_tuples=True)
     lua.execute("""
         now = 0
@@ -43,8 +47,16 @@ def game(native=False):
         lua.globals().dotsai.solve_reset = kernel.test_solver_reset
         lua.globals().dotsai.solve = lambda c, l: kernel.test_solve(
             c.encode("latin1"), len(c), l.encode("latin1"), len(l))
+        lua.globals().dotsai.cold_init = lambda b, e, be, eb: kernel.test_cold_init(
+            b, e, be.encode("latin1"), eb.encode("latin1"))
+        def cold(filled, excluded):
+            output = ctypes.create_string_buffer(512)
+            count = kernel.test_cold(filled.encode("latin1"),
+                                    excluded.encode("latin1") if excluded else None, output)
+            return output.raw[:count]
+        lua.globals().dotsai.cold = cold
     board = lua.execute((ROOT / "Source/board.lua").read_text())
-    ai = lua.execute((ROOT / "Source/ai.lua").read_text())
+    ai = lua.execute(source if source is not None else (ROOT / "Source/ai.lua").read_text())
     return lua, board, ai
 
 
