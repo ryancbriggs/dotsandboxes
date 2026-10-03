@@ -1,7 +1,9 @@
 import unittest
+import random
 from itertools import permutations
 
 from lua_helpers import ROOT, app, game, position
+from endgame_reference import boxes_for, edge_values
 
 
 class SchedulerTests(unittest.TestCase):
@@ -46,6 +48,52 @@ class CompletionTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_small_junctions_match_independent_exhaustive_search(self):
+        rng = random.Random(8416)
+        boxes = boxes_for(4)
+        checked = 0
+        for _ in range(60000):
+            free = tuple(sorted(rng.sample(range(1, 25), rng.randint(6, 11))))
+            counts = [4 - len(b.intersection(free)) for b in boxes]
+            if 3 in counts or min(counts) >= 2:
+                continue
+            if any(not any(e in b and counts[i] == 2 for i, b in enumerate(boxes)) for e in free):
+                continue
+            values = edge_values(4, free)
+            for native in (False, True):
+                _, board, ai = game(native=native)
+                b = position(board, 4, free)
+                ai.setDifficulty("expert")
+                self.assertEqual(values[ai.chooseMove(b)], max(values.values()), free)
+            checked += 1
+            if checked == 12:
+                break
+        self.assertEqual(checked, 12)
+
+    def test_large_junction_fallback_is_legal_and_preserves_board(self):
+        _, board, ai = game()
+        filled = {6,8,12,14,15,16,17,18,20,24,26,28,29,30,31,32,40,41,43,49,
+                  58,59,60,61,63,67,69,71,74,77,79,82,86,87,89,91,93,95,96,
+                  98,99,100,101,103,106,107,108,109,110,111}
+        free = set(range(1, 113)) - filled
+        b = position(board, 8, free)
+        ai.setDifficulty("expert")
+        self.assertIn(ai.chooseMove(b), free)
+        self.assertEqual(set(b.edgesFilled.keys()), filled)
+        self.assertEqual(list(b.score.values()), [0, 0])
+
+    def test_expert_searches_junctions_as_actual_edges(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                _, board, ai = game(native=native)
+                b = position(board, 4, [4, 5, 6, 13, 15, 18, 19])
+                ai.setDifficulty("expert")
+                self.assertEqual(ai.chooseMove(b), 4)
+                # The two-chain correction happens to repair the first fixture,
+                # but this junction still loses 5 instead of winning 1.
+                b = position(board, 4, [1, 3, 4, 6, 7, 9, 10, 18, 19, 24])
+                self.assertIn(ai.chooseMove(b), (18, 19))
+
     def test_expert_opens_two_chain_internally(self):
         for native in (False, True):
             with self.subTest(native=native):

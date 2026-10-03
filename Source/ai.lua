@@ -557,9 +557,94 @@ local function coldOpeningEdge(board, comp)
     return comp.edge
 end
 
+-- Junctions are not independent chains. Search their actual remaining edges
+-- when small enough (at most 2^14 states), without mutating the live board.
+-- Larger junction positions use a bounded, explicitly approximate policy:
+-- open the edge that gives away the fewest immediately collectable boxes.
+local function junctionOpening(board, free)
+    if #free > 14 then
+        local bestEdge, bestLoss = free[1], math.huge
+        for _, first in ipairs(free) do
+            yieldIfBudgetExceeded()
+            local used, counts = {}, {}
+            for b, edges in ipairs(board.boxEdges) do
+                counts[b] = 4 - EdgeUtils.countFilled(board, edges)
+            end
+            local function play(edge)
+                used[edge] = true
+                local claimed = 0
+                for _, b in ipairs(board.edgeBoxes[edge]) do
+                    counts[b] = counts[b] - 1
+                    if counts[b] == 0 then claimed = claimed + 1 end
+                end
+                return claimed
+            end
+            play(first)
+            local loss = 0
+            while true do
+                local closer
+                for _, edge in ipairs(free) do
+                    if not used[edge] then
+                        for _, b in ipairs(board.edgeBoxes[edge]) do
+                            if counts[b] == 1 then closer = edge; break end
+                        end
+                    end
+                    if closer then break end
+                end
+                if not closer then break end
+                loss = loss + play(closer)
+            end
+            if loss < bestLoss then bestEdge, bestLoss = first, loss end
+        end
+        return bestEdge
+    end
+
+    local bits, masks = {}, {}
+    for i, edge in ipairs(free) do bits[edge] = 1 << (i - 1) end
+    for b, edges in ipairs(board.boxEdges) do
+        local mask = 0
+        for _, edge in ipairs(edges) do mask = mask | (bits[edge] or 0) end
+        masks[b] = mask
+    end
+    local memo = { [0] = 0 }
+    local function solve(remaining)
+        yieldIfBudgetExceeded()
+        if memo[remaining] ~= nil then return memo[remaining] end
+        local best = -math.huge
+        for _, edge in ipairs(free) do
+            local bit = bits[edge]
+            if remaining & bit ~= 0 then
+                local gained = 0
+                for _, b in ipairs(board.edgeBoxes[edge]) do
+                    if remaining & masks[b] == bit then gained = gained + 1 end
+                end
+                local rest = solve(remaining ~ bit)
+                local value = gained > 0 and (gained + rest) or -rest
+                if value > best then best = value end
+            end
+        end
+        memo[remaining] = best
+        return best
+    end
+    local remaining = (1 << #free) - 1
+    local bestEdge, best = free[1], -math.huge
+    for _, edge in ipairs(free) do
+        -- The caller has no closers, so every opening passes the turn.
+        local value = -solve(remaining ~ bits[edge])
+        if value > best then bestEdge, best = edge, value end
+    end
+    return bestEdge
+end
+
 function Endgame.berlekampSolver(board, snapshot)
     snapshot = snapshot or EdgeUtils.classify(board)
     local comps = Components.cold(board)
+    local represented = 0
+    for _, comp in ipairs(comps) do represented = represented + comp.len end
+    local remaining = #board.boxEdges - board.score[1] - board.score[2]
+    if represented ~= remaining then
+        return junctionOpening(board, snapshot.free)
+    end
     if #comps == 0 then
         return snapshot.free[math.random(#snapshot.free)]
     end
