@@ -441,6 +441,7 @@ local function drawCheckbox(x, y, s, checked)
     end
 end
 
+local badgeLayouts = {}
 local function drawBadgesTab()
     local f = Fonts.body
     local lineH = f:getHeight() + 2
@@ -471,7 +472,12 @@ local function drawBadgesTab()
         -- either way (bold when earned for a touch of emphasis).
         local head = b.goal
 
-        local lines = wrapText(f, head, contW)
+        local layout = badgeLayouts[b.id]
+        if not layout or layout.font ~= f or layout.width ~= contW or layout.text ~= head then
+            layout = { font = f, width = contW, text = head, lines = wrapText(f, head, contW) }
+            badgeLayouts[b.id] = layout
+        end
+        local lines = layout.lines
         local blockH = #lines * lineH
 
         -- Stop before a block would collide with the footer (but always
@@ -513,9 +519,7 @@ end
 
 -- Totals rendered as a short prose summary (singular/plural aware) rather
 -- than a key/value table — easier to read at a glance.
-local function drawTotalsTab()
-    local t = Stats.data.totals
-
+local function totalsLines(t, f, width)
     local function plural(count, singular, pluralForm)
         if count == 1 then return "1 " .. singular end
         return count .. " " .. pluralForm
@@ -542,16 +546,26 @@ local function drawTotalsTab()
     local s5 = "Total time played: " .. fmtDuration(t.secondsPlayed) .. "."
 
     local paragraph = table.concat({ s1, s2, s3, s4, s5 }, "  ")
+    return wrapText(f, paragraph, width)
+end
+
+local totalsLayout
+local function drawTotalsTab()
+    local t = Stats.data.totals
     local f = Fonts.body
-    local sw = playdate.display.getWidth()
-    local lineH = f:getHeight() + 4
-    local lines = wrapText(f, paragraph, sw - 60)
+    local width = playdate.display.getWidth() - 60
+    -- Totals change when a game is recorded, or the whole table is reset.
+    if not totalsLayout or totalsLayout.totals ~= t or totalsLayout.games ~= t.gamesPlayed
+        or totalsLayout.font ~= f or totalsLayout.width ~= width then
+        totalsLayout = { totals = t, games = t.gamesPlayed, font = f, width = width,
+            lines = totalsLines(t, f, width), lineH = f:getHeight() + 4 }
+    end
     -- Breathing room below the header bar; the paragraph is short so this
     -- also evens out the (otherwise large) empty space below it.
     local y = STATS_CONTENT_TOP + 22
-    for _, ln in ipairs(lines) do
+    for _, ln in ipairs(totalsLayout.lines) do
         gfx.drawText(ln, 30, y)
-        y = y + lineH
+        y = y + totalsLayout.lineH
     end
 end
 

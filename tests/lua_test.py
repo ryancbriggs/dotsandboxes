@@ -136,6 +136,64 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(stats.data.bySize[6].wins, 4)
 
 
+class LayoutTests(unittest.TestCase):
+    def setup_layout(self):
+        lua, main = app()
+        lua.execute('''
+            widthCalls=0; texts={}
+            modules.fonts.body.getTextWidth=function(_,s) widthCalls=widthCalls+1; return #s*7 end
+            playdate.graphics.drawText=function(s) texts[#texts+1]=s end
+            modules.stats.data={badges={},totals={gamesPlayed=1,gamesPvcP1=1,
+                gamesPvcP2=0,gamesPvp=0,boxesClaimed=5,boxesAgainst=4,
+                longestChain=3,secondsPlayed=90}}
+            modules.stats.allBadges={
+                {id='one',goal='Claim a long chain of boxes in a single turn'},
+                {id='two',goal='Win on every board size'}}
+        ''')
+        return lua, main
+
+    def test_summary_reuses_layout_and_refreshes_after_recording(self):
+        lua, main = self.setup_layout()
+        main.drawTotals()
+        initial = list(lua.globals().texts.values())
+        lua.execute("widthCalls=0; texts={}")
+        main.drawTotals()
+        self.assertEqual(list(lua.globals().texts.values()), initial)
+        self.assertEqual(lua.globals().widthCalls, 0)
+        lua.execute("modules.stats.data.totals.gamesPlayed=2; texts={}")
+        main.drawTotals()
+        self.assertIn("2 games", " ".join(lua.globals().texts.values()))
+
+    def test_goal_wrapping_is_reused_across_frames(self):
+        lua, main = self.setup_layout()
+        main.drawBadges()
+        initial = list(lua.globals().texts.values())
+        lua.execute("widthCalls=0; texts={}")
+        main.drawBadges()
+        self.assertEqual(list(lua.globals().texts.values()), initial)
+        self.assertLessEqual(lua.globals().widthCalls, 1)  # optional scroll label
+        main.setBadgeScroll(1)
+        lua.execute("texts={}")
+        main.drawBadges()
+        self.assertIn("Win on every board size", list(lua.globals().texts.values()))
+
+    def test_game_over_layout_refreshes_when_badges_arrive(self):
+        lua, main = self.setup_layout()
+        main.settings.numDots = 4
+        main.init("pvp")
+        ui = main.getUI()
+        for edge in range(1, len(ui.board.edgeToCoord) + 1):
+            ui.board.playEdge(ui.board, edge, True)
+        lua.globals().drawUI(ui)
+        lua.execute("widthCalls=0; texts={}")
+        lua.globals().drawUI(ui)
+        self.assertEqual(lua.globals().widthCalls, 4)  # two score labels/numerals
+        ui.newBadges = lua.table_from([lua.table_from({"goal": "Newly earned goal"})])
+        lua.execute("texts={}")
+        lua.globals().drawUI(ui)
+        self.assertIn("Newly earned goal", list(lua.globals().texts.values()))
+
+
 class EndgameTests(unittest.TestCase):
     def test_equivalent_components_share_one_native_evaluation(self):
         lua, board, ai = game(native=True)

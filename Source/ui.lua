@@ -411,61 +411,70 @@ function UI:draw()
         local fH1, fH2  = F.h1 or sys, F.h2 or sys
         local fBody, fC = F.body or sys, F.caption or sys
 
-        local pvc = self.mode == "pvc"
-        local n1  = pvc and "You" or "P1"
-        local n2  = pvc and "CPU" or "P2"
+        local layout = self.gameOverLayout
+        if not layout or layout.badges ~= self.newBadges then
+            local pvc = self.mode == "pvc"
+            local n1  = pvc and "You" or "P1"
+            local n2  = pvc and "CPU" or "P2"
 
-        local winnerLine
-        if p1Score > p2Score then winnerLine = (pvc and "You win!" or "P1 wins!")
-        elseif p2Score > p1Score then winnerLine = (pvc and "CPU wins!" or "P2 wins!")
-        else winnerLine = "It's a draw" end
+            local winnerLine
+            if p1Score > p2Score then winnerLine = (pvc and "You win!" or "P1 wins!")
+            elseif p2Score > p1Score then winnerLine = (pvc and "CPU wins!" or "P2 wins!")
+            else winnerLine = "It's a draw" end
 
-        local lc1, lc2 = self.board.longestChain[1], self.board.longestChain[2]
-        local chainLine
-        if lc1 == lc2 then
-            chainLine = "Longest chain: tied at " .. lc1
-        else
-            local who = (lc1 > lc2) and n1 or n2
-            chainLine = "Longest chain: " .. who .. " - " .. math.max(lc1, lc2)
-        end
-
-        local endMs = self.board.endMs or playdate.getCurrentTimeMilliseconds()
-        local secs = math.floor((endMs - self.board.startMs) / 1000)
-        local timeLine = string.format("Time: %d:%02d",
-            math.floor(secs / 60), secs % 60)
-
-        -- Each line: { text, font, chip? }. `chip` rows render as an inverted
-        -- pill (the unlocked-goal toast).
-        local lines = {}
-
-        if self.newBadges and #self.newBadges > 0 then
-            local cap = math.min(3, #self.newBadges)
-            for i = 1, cap do
-                lines[#lines + 1] = { self.newBadges[i].goal, fC, chip = true }
+            local lc1, lc2 = self.board.longestChain[1], self.board.longestChain[2]
+            local chainLine
+            if lc1 == lc2 then
+                chainLine = "Longest chain: tied at " .. lc1
+            else
+                local who = (lc1 > lc2) and n1 or n2
+                chainLine = "Longest chain: " .. who .. " - " .. math.max(lc1, lc2)
             end
-            if #self.newBadges > cap then
-                lines[#lines + 1] = { "+" .. (#self.newBadges - cap) .. " more", fC, chip = true }
+
+            local endMs = self.board.endMs or playdate.getCurrentTimeMilliseconds()
+            local secs = math.floor((endMs - self.board.startMs) / 1000)
+            local timeLine = string.format("Time: %d:%02d",
+                math.floor(secs / 60), secs % 60)
+
+            -- Each line: { text, font, chip? }. `chip` rows render as an inverted
+            -- pill (the unlocked-goal toast).
+            local lines = {}
+
+            if self.newBadges and #self.newBadges > 0 then
+                local cap = math.min(3, #self.newBadges)
+                for i = 1, cap do
+                    lines[#lines + 1] = { self.newBadges[i].goal, fC, chip = true }
+                end
+                if #self.newBadges > cap then
+                    lines[#lines + 1] = { "+" .. (#self.newBadges - cap) .. " more", fC, chip = true }
+                end
             end
+
+            lines[#lines + 1] = { "Game Over",                  fH1 }
+            lines[#lines + 1] = { winnerLine,                   fH2 }
+            lines[#lines + 1] = { chainLine,                    fBody }
+            lines[#lines + 1] = { timeLine,                     fBody }
+            lines[#lines + 1] = { "(Crank: review   A: play again   B: menu)",  fC }
+
+            local maxW, totalH = 0, 0
+            local rowH = {}
+            for i, l in ipairs(lines) do
+                local font = l[2]
+                l.width = font:getTextWidth(l[1])
+                local w = l.width + (l.chip and 20 or 0)
+                if w > maxW then maxW = w end
+                rowH[i] = font:getHeight() + (l.chip and 8 or 4)
+                totalH = totalH + rowH[i]
+            end
+
+            local panelW = maxW + 28
+            local panelH = totalH + 16
+            layout = { badges = self.newBadges, lines = lines, rowH = rowH,
+                panelW = panelW, panelH = panelH }
+            self.gameOverLayout = layout
         end
-
-        lines[#lines + 1] = { "Game Over",                  fH1 }
-        lines[#lines + 1] = { winnerLine,                   fH2 }
-        lines[#lines + 1] = { chainLine,                    fBody }
-        lines[#lines + 1] = { timeLine,                     fBody }
-        lines[#lines + 1] = { "(Crank: review   A: play again   B: menu)",  fC }
-
-        local maxW, totalH = 0, 0
-        local rowH = {}
-        for i, l in ipairs(lines) do
-            local font = l[2]
-            local w = font:getTextWidth(l[1]) + (l.chip and 20 or 0)
-            if w > maxW then maxW = w end
-            rowH[i] = font:getHeight() + (l.chip and 8 or 4)
-            totalH = totalH + rowH[i]
-        end
-
-        local panelW = maxW + 28
-        local panelH = totalH + 16
+        local lines, rowH = layout.lines, layout.rowH
+        local panelW, panelH = layout.panelW, layout.panelH
         local sw, sh = playdate.display.getSize()
         local cx, cy = sw / 2, sh / 2
 
@@ -497,7 +506,7 @@ function UI:draw()
         local y = math.floor(cy - panelH / 2) + 8
         for i, l in ipairs(lines) do
             gfx.setFont(l[2])
-            local tw = l[2]:getTextWidth(l[1])
+            local tw = l.width
             local tx = math.floor(cx - tw / 2)
             if l.chip then
                 local cw, ch = tw + 18, rowH[i] - 2

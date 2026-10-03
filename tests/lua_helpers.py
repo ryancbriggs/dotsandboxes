@@ -95,7 +95,8 @@ def app():
         return {init=initGame,getUI=function() return ui end,
             setState=function(s) appState=s end,getState=function() return appState end,
             settings=settings,returnMenu=returnToMainMenu,
-            settingsInput=handleSettingsInput}
+            settingsInput=handleSettingsInput,drawTotals=drawTotalsTab,
+            drawBadges=drawBadgesTab,setBadgeScroll=function(n) badgeScroll=n end}
     ''')
     lua.globals().main = main
     return lua, main
