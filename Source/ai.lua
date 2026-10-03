@@ -541,7 +541,7 @@ function Endgame.berlekampSolver(board, snapshot)
         return snapshot.free[math.random(#snapshot.free)]
     end
 
-    local bestScore, bestEdges = -math.huge, {}
+    local bestScore, bestComps = -math.huge, {}
 
     for i, comp in ipairs(comps) do
         -- Future value of the state with this one component opened/removed,
@@ -554,27 +554,29 @@ function Endgame.berlekampSolver(board, snapshot)
         local worst = componentOpenValue(comp.len, comp.isLoop, nextVal)
 
         if worst > bestScore then
-            bestScore, bestEdges = worst, { comp.edge }
+            bestScore, bestComps = worst, { comp }
         elseif worst == bestScore then
-            bestEdges[#bestEdges + 1] = comp.edge
+            bestComps[#bestComps + 1] = comp
         end
     end
 
-    if #bestEdges == 0 then
+    if #bestComps == 0 then
         return Endgame.negamaxSolver(board, snapshot)
     end
 
-    -- Deterministic tie-break: higher scoreSafeEdge, then lower edge id.
-    local choice = bestEdges[1]
-    local bestH = Heuristics.scoreSafeEdge(board, choice)
-    for i = 2, #bestEdges do
-        local e = bestEdges[i]
-        local h = Heuristics.scoreSafeEdge(board, e)
-        if h > bestH or (h == bestH and e < choice) then
-            choice, bestH = e, h
+    -- Deterministic tie-break: among equal-value cold openings, give the
+    -- opponent the smallest component first. This avoids "Expert" choosing an
+    -- equal-margin line that visibly hands over the longest loop/chain.
+    local choice = bestComps[1]
+    for i = 2, #bestComps do
+        local comp = bestComps[i]
+        if comp.len < choice.len
+        or (comp.len == choice.len and comp.edge < choice.edge)
+        then
+            choice = comp
         end
     end
-    return choice
+    return choice.edge
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -779,6 +781,9 @@ local function onlyHotCapturesRemain(board)
 end
 
 local function collectClosers(board)
+    if not (board and board.boxEdges and board.edgesFilled) then
+        return {}
+    end
     local closers, seen = {}, {}
     local boxEdges = board.boxEdges
     local edgesFilled = board.edgesFilled
@@ -922,8 +927,8 @@ local function selectTopSafes(board, safes, limit)
     return top
 end
 
-local function evaluateForPlayer(board, rootPlayer)
-    local value = evaluateTerminal(board)
+local function evaluateForPlayer(board, rootPlayer, allowDX)
+    local value = evaluateTerminal(board, allowDX)
     if board.currentPlayer ~= rootPlayer then
         value = -value
     end
@@ -1050,6 +1055,7 @@ function Expert.chooseMove(board, snapshot)
     local rootPlayer = board.currentPlayer
 
     if #snapshot.closers > 0 then
+        local midChain = (board.chainLen or 0) > 0
         if onlyHotCapturesRemain(board) then
             return snapshot.closers[1]
         end
@@ -1064,13 +1070,15 @@ function Expert.chooseMove(board, snapshot)
 
         -- 1) Greedy chain continuation: take a closer.
         local candidates = snapshot.closers
-        if #candidates > CLOSER_EVAL_LIMIT then
+        if midChain then
+            candidates = { snapshot.closers[1] }
+        elseif #candidates > CLOSER_EVAL_LIMIT then
             candidates = selectTopSafes(board, candidates, CLOSER_EVAL_LIMIT)
         end
         for _, edge in ipairs(candidates) do
             yieldIfBudgetExceeded()
             local state = applyMove(board, edge)
-            local score = evaluateForPlayer(board, rootPlayer)
+            local score = evaluateForPlayer(board, rootPlayer, not midChain)
             undoMove(board, state)
             if closerLog then closerLog[#closerLog + 1] = edge .. "=" .. score end
             if score > bestScore then
@@ -1119,15 +1127,15 @@ function Expert.chooseMove(board, snapshot)
             end
         end
 
-        local dxLimit = math.min(4, #dxCandidates)
+        local dxLimit = math.min(midChain and 1 or 4, #dxCandidates)
         for i = 1, dxLimit do
             yieldIfBudgetExceeded()
             local edge = dxCandidates[i]
             local state = applyMove(board, edge)
-            local score = evaluateForPlayer(board, rootPlayer)
+            local score = evaluateForPlayer(board, rootPlayer, false)
             undoMove(board, state)
             if dxLog then dxLog[#dxLog + 1] = edge .. "=" .. score end
-            if score > bestScore then
+            if score >= bestScore then
                 bestScore, bestEdge = score, edge
             end
         end
