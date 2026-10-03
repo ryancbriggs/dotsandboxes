@@ -540,12 +540,13 @@ end
 -- boxes as possible. This is approximate; independent-chain theory is invalid.
 local function approximateJunctionOpening(board, free)
     local bestEdge, bestLoss = free[1], math.huge
+    local initialCounts = {}
+    for b, edges in ipairs(board.boxEdges) do
+        initialCounts[b] = 4 - EdgeUtils.countFilled(board, edges)
+    end
     for _, first in ipairs(free) do
         yieldIfBudgetExceeded()
-        local used, counts = {}, {}
-        for b, edges in ipairs(board.boxEdges) do
-            counts[b] = 4 - EdgeUtils.countFilled(board, edges)
-        end
+        local used, counts = {}, { table.unpack(initialCounts) }
         local function play(edge)
             used[edge] = true
             local claimed = 0
