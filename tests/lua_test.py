@@ -1,6 +1,6 @@
 import unittest
 
-from lua_helpers import game, position
+from lua_helpers import app, game, position
 
 
 class SchedulerTests(unittest.TestCase):
@@ -19,6 +19,29 @@ class SchedulerTests(unittest.TestCase):
                 break
         self.assertTrue(done)
         self.assertFalse(b.edgesFilled[edge])
+
+
+class CompletionTests(unittest.TestCase):
+    def test_ai_final_move_is_recorded_before_restart_or_menu(self):
+        for button in ("A", "B"):
+            with self.subTest(button=button):
+                lua, main = app()
+                main.settings.numDots = 4
+                main.settings.firstPlayer = "player1"
+                main.init("pvc")
+                b = main.getUI().board
+                for edge in range(1, len(b.edgeToCoord)):
+                    b.playEdge(b, edge, True)
+                b.currentPlayer = 2
+                b.chainLen = 0
+                lua.globals().nextMove = len(b.edgeToCoord)
+                lua.globals().playdate.update()
+                self.assertTrue(b.isGameOver(b))
+                self.assertEqual(lua.globals().records, 1)
+                lua.globals().pressed[button] = True
+                lua.globals().playdate.update()
+                self.assertEqual(lua.globals().records, 1)
+                self.assertTrue(b.recorded)
 
 
 if __name__ == "__main__":

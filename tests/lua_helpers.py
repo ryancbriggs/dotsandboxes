@@ -55,3 +55,47 @@ def position(board, dots, free):
         if edge not in free:
             result.playEdge(result, edge)
     return result
+
+
+def app():
+    lua = LuaRuntime(unpack_returned_tuples=True)
+    lua.execute('''
+        now=10000; pressed={}; crank=0; writes={}; records=0
+        local no=function() end
+        local font={getHeight=function() return 14 end,getTextWidth=function(_,s) return #s*7 end}
+        playdate={
+            graphics=setmetatable({setFont=no,clear=no,sprite={update=no},
+                getSystemFont=function() return font end}, {__index=function() return no end}),
+            display={setRefreshRate=no,getSize=function() return 400,240 end,
+                getWidth=function() return 400 end,getHeight=function() return 240 end},
+            datastore={read=function() return nil end,write=function(t,k) writes[#writes+1]=k end},
+            getCurrentTimeMilliseconds=function() return now end,
+            getSecondsSinceEpoch=function() return 1 end,
+            inputHandlers={push=no},timer={updateTimers=no},
+            getSystemMenu=function() return {addMenuItem=no,addCheckmarkMenuItem=no} end,
+            kButtonA='A',kButtonB='B',kButtonUp='Up',kButtonDown='Down',
+            kButtonLeft='Left',kButtonRight='Right',
+            buttonJustPressed=function(k) return pressed[k] or false end,
+            getCrankPosition=function() return crank end,
+            getCrankTicks=function() return 0 end
+        }
+        modules={
+            sound={basic=no,select=no,done=no,gameOver=no,reviewStep=no},
+            fonts={body=font,h1=font,h2=font,caption=font},
+            stats={load=no,recordGame=function(b) records=records+1;b.recorded=true;return {} end},
+            ai={cancel=no,setDifficulty=no,isThinking=function() return false end,
+                beginChooseMove=no,tick=function() return true,nextMove end}
+        }
+        function import(name) return modules[name] end
+    ''')
+    for name in ("board", "focus", "ui"):
+        lua.globals().modules[name] = lua.execute((ROOT / "Source" / (name + ".lua")).read_text())
+    lua.execute("drawUI=modules.ui.draw; modules.ui.draw=function() end")
+    main = lua.execute((ROOT / "Source/main.lua").read_text() + '''
+        return {init=initGame,getUI=function() return ui end,
+            setState=function(s) appState=s end,getState=function() return appState end,
+            settings=settings,returnMenu=returnToMainMenu,
+            settingsInput=handleSettingsInput}
+    ''')
+    lua.globals().main = main
+    return lua, main

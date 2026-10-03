@@ -968,6 +968,9 @@ function playdate.update()
             recordIfFinished()
             ui:draw()
             tickAI()
+            -- An AI move can finish the game after the pre-draw check. Persist
+            -- it now, before next frame's A/B or system-menu input discards it.
+            recordIfFinished()
         end
     end
 
