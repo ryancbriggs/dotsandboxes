@@ -152,6 +152,7 @@ function UI.new(board, opts)
     self.replayIndex = nil
     self.replayState = nil
     self.replayTickRemainder = 0
+    self.replayBaselineSet = false
     -- Per-box claim-animation start times (boxId -> ms timestamp)
     self.boxAnimStart = {}
     playdate.display.setRefreshRate(20)
@@ -164,6 +165,12 @@ end
 function UI:handleInput()
     if self.board:isGameOver() then
         local ticks = playdate.getCrankTicks(REPLAY_TICKS_PER_REV)
+        if not self.replayBaselineSet then
+            -- The SDK retains its last crank reading across games. Discard
+            -- movement from gameplay before interpreting new review input.
+            self.replayBaselineSet = true
+            ticks = 0
+        end
         if ticks ~= 0 and self.board.history and #self.board.history > 0 then
             if not self.replayActive then
                 self.replayActive = true

@@ -4,6 +4,7 @@ from itertools import permutations
 
 from lua_helpers import ROOT, app, game, position
 from endgame_reference import boxes_for, edge_values
+from build_test import sdk_path
 
 
 class SchedulerTests(unittest.TestCase):
@@ -25,6 +26,31 @@ class SchedulerTests(unittest.TestCase):
 
 
 class CompletionTests(unittest.TestCase):
+    def test_crank_motion_before_game_over_does_not_enter_replay(self):
+        sdk = sdk_path()
+        if not sdk:
+            self.skipTest("SDK crank implementation unavailable")
+        lua, main = app()
+        source = (sdk / "CoreLibs/crank.lua").read_text()
+        source = source.replace("tick_lastCrankReading -= 360", "tick_lastCrankReading = tick_lastCrankReading - 360")
+        source = source.replace("tick_lastCrankReading += 360", "tick_lastCrankReading = tick_lastCrankReading + 360")
+        lua.execute(source)
+        lua.globals().crank = 180
+        lua.globals().playdate.getCrankTicks(24)
+        main.settings.numDots = 4
+        main.init("pvp")
+        ui = main.getUI()
+        lua.globals().crank = 90
+        ui.handleInput(ui)
+        for edge in range(1, len(ui.board.edgeToCoord) + 1):
+            ui.board.playEdge(ui.board, edge, True)
+        ui.handleInput(ui)
+        self.assertFalse(ui.replayActive)
+        lua.globals().crank = 60
+        ui.handleInput(ui)
+        self.assertTrue(ui.replayActive)
+        self.assertEqual(ui.replayIndex, len(ui.board.history) - 1)
+
     def test_ai_final_move_is_recorded_before_restart_or_menu(self):
         for button in ("A", "B"):
             with self.subTest(button=button):
