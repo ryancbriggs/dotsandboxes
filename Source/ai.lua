@@ -570,6 +570,7 @@ local function approximateJunctionOpening(board, free)
             end
             if not closer then break end
             loss = loss + play(closer)
+            if loss >= bestLoss then break end
         end
         if loss < bestLoss then bestEdge, bestLoss = first, loss end
     end

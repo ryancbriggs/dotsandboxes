@@ -76,6 +76,9 @@ or four from a loop. With exact search forced to time out, it wins the positions
 before moves 88 and 96 by 29–20 and 26–23 against exhaustive best play.
 Validation against `6c28c74`, seeds 7000–7059 on all five sizes: 376 wins,
 30 draws, 194 losses (65.2%); 8×8 alone: 103 wins, 17 losses (85.8%).
-These corrected decisions still need a fresh hardware timing check.
+Follow-up hardware play ended 28–21 for Expert; all 20 logged moves with 26 or
+fewer free edges matched exhaustive best play. Two junction openings still took
+about a second. The fallback now stops evaluating an opening once its box loss
+cannot beat the best candidate; this additional speedup needs device timing.
 AI debug logs include the pre-move score, player, chain length, and free edges
 so future suspect positions can be reconstructed directly from a console log.
