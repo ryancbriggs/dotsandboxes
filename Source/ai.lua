@@ -650,17 +650,23 @@ function Endgame.berlekampSolver(board, snapshot)
     end
 
     local bestScore, bestComps = -math.huge, {}
+    local typeScores = {}
 
     for i, comp in ipairs(comps) do
         yieldIfBudgetExceeded()
-        -- Future value of the state with this one component opened/removed,
-        -- via the C kernel when available (fast path), else Lua fallback.
-        local rest = {}
-        for j, c in ipairs(comps) do
-            if j ~= i then rest[#rest + 1] = c end
+        -- Removing equivalent components leaves the same multiset. Share the
+        -- value, but retain physical components for the opening-edge tie-break.
+        local kind = comp.isLoop and -comp.len or comp.len
+        local worst = typeScores[kind]
+        if worst == nil then
+            local rest = {}
+            for j, c in ipairs(comps) do
+                if j ~= i then rest[#rest + 1] = c end
+            end
+            local nextVal = endgameFuture(rest)
+            worst = componentOpenValue(comp.len, comp.isLoop, nextVal)
+            typeScores[kind] = worst
         end
-        local nextVal = endgameFuture(rest)
-        local worst = componentOpenValue(comp.len, comp.isLoop, nextVal)
 
         if worst > bestScore then
             bestScore, bestComps = worst, { comp }

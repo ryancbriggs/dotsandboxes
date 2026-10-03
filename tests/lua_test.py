@@ -137,6 +137,18 @@ class PersistenceTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_equivalent_components_share_one_native_evaluation(self):
+        lua, board, ai = game(native=True)
+        b = position(board, 4, range(1, 13))  # Three identical vertical 3-chains.
+        lua.execute('''
+            solveCalls=0
+            local solve=dotsai.solve
+            dotsai.solve=function(c,l) solveCalls=solveCalls+1; return solve(c,l) end
+        ''')
+        ai.setDifficulty("expert")
+        self.assertEqual(ai.chooseMove(b), 1)
+        self.assertEqual(lua.globals().solveCalls, 1)
+
     def test_small_junctions_match_independent_exhaustive_search(self):
         rng = random.Random(8416)
         boxes = boxes_for(4)
