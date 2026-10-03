@@ -599,10 +599,10 @@ local function approximateJunctionOpening(board, free)
 end
 
 -- Exact future box margin, including extra turns, on a separate edge mask.
--- Native batches search up to 16 free edges; the Lua fallback caps at 14.
+-- Native batches search up to 18 free edges; the Lua fallback caps at 14.
 -- No result is used unless the search finishes within its wall-time budget.
 local function endgameEdgeSearch(board, free, deadline)
-    if #free <= 16 and dotsai and dotsai.exact_begin and dotsai.exact_step
+    if #free <= 18 and dotsai and dotsai.exact_begin and dotsai.exact_step
         and ensureColdTopo(board) and dotsai.exact_begin(string.char(table.unpack(free))) then
         while true do
             yieldIfBudgetExceeded()
@@ -1211,7 +1211,7 @@ function Expert.chooseMove(board, snapshot)
 
     -- Mixed positions need real move order, not independent-chain estimates.
     -- Keep the faster component solver for already-cold endgames.
-    local exactLimit = (dotsai and dotsai.exact_begin and dotsai.exact_step) and 16 or 12
+    local exactLimit = (dotsai and dotsai.exact_begin and dotsai.exact_step) and 18 or 12
     if #snapshot.free <= exactLimit and (#snapshot.closers > 0 or #snapshot.safes > 0) then
         local edge = endgameEdgeSearch(board, snapshot.free, nowMs() + EXPERT_EXACT_BUDGET_MS)
         if edge then return edge end

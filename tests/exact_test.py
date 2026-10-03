@@ -39,13 +39,13 @@ class ExactTests(unittest.TestCase):
         kernel = native_solver()
         set_topology(kernel, 4)
         free = [2, 4, 6, 7, 8, 9, 10, 12, 14, 16, 17, 18, 23]
-        maximum = bytes(range(1, 17))
+        maximum = bytes(range(1, 19))
         values = edge_values(4, maximum)
         self.assertTrue(kernel.test_exact_begin(maximum, len(maximum)))
-        edge = kernel.test_exact_step(1 << 16)
+        edge = kernel.test_exact_step(1 << 18)
         self.assertEqual(values[edge], max(values.values()))
         self.assertEqual(kernel.test_exact_value(), max(values.values()))
-        kernel.test_exact_begin(bytes(range(1, 17)), 16)
+        kernel.test_exact_begin(maximum, len(maximum))
         self.assertEqual(kernel.test_exact_step(100), 0)
         self.assertTrue(kernel.test_exact_begin(bytes(free), len(free)))
         self.assertEqual(kernel.test_exact_next(), 1)
@@ -55,6 +55,6 @@ class ExactTests(unittest.TestCase):
         self.assertEqual(edge, 12)
         self.assertEqual(kernel.test_exact_value(), 7)
         # Invalid starts discard an old result, including an already solved one.
-        for invalid in (b"", bytes([0]), bytes([25]), bytes([2, 2]), bytes(range(1, 18))):
+        for invalid in (b"", bytes([0]), bytes([25]), bytes([2, 2]), bytes(range(1, 20))):
             self.assertFalse(kernel.test_exact_begin(invalid, len(invalid)))
             self.assertEqual(kernel.test_exact_step(512), 0)

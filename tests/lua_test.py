@@ -264,6 +264,16 @@ class LayoutTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_native_expert_resolves_a_seventeen_edge_tactic(self):
+        free = [3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 16, 17, 18, 20, 22, 23, 24]
+        values = edge_values(4, free)
+        self.assertEqual(values[4], 3)
+        self.assertEqual(values[20], -1)
+        _, board, ai = game(native=True)
+        b = position(board, 4, free)
+        ai.setDifficulty("expert")
+        self.assertEqual(ai.chooseMove(b), 4)
+
     def test_native_expert_sees_past_the_old_endgame_horizon(self):
         free = [2, 4, 6, 7, 8, 9, 10, 12, 14, 16, 17, 18, 23]
         values = edge_values(4, free)

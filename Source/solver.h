@@ -235,9 +235,9 @@ static int cold_decompose(ColdTopo* t, const uint8_t* filled,
 // ─── Exact remaining-edge search ──────────────────────────────────────────
 // Every child removes a bit, so increasing mask order visits children first.
 // Values are future box margins for the player to move; captures keep the
-// turn. Scores fit in int8_t (at most 49 boxes), using 64 KiB at 16 free edges.
+// turn. Scores fit in int8_t (at most 49 boxes), using 256 KiB at 18 free edges.
 // The caller owns the workspace and advances it in small, interruptible batches.
-#define DOTSAI_EXACT_MAX_EDGES 16
+#define DOTSAI_EXACT_MAX_EDGES 18
 
 typedef struct {
     int8_t values[1u << DOTSAI_EXACT_MAX_EDGES];
