@@ -22,8 +22,12 @@ endif
 # Check the C kernels against independent recursive oracles before building.
 # Actual Lua/C parity is checked by tests/native_test.py in the full suite.
 ifeq ($(filter clean,$(MAKECMDGOALS)),)
-PARITY_OUT := $(shell cc -O2 -std=c11 -o /tmp/dots_parity_test tests/parity_test.c 2>&1 && /tmp/dots_parity_test 2>&1)
-ifeq ($(findstring PARITY_OK,$(PARITY_OUT)),)
+# Each build owns its executable; failures are detected by exit status.
+PARITY_OUT := $(shell task_parity_bin=$$(mktemp /tmp/dots-parity.XXXXXX) && \
+	{ trap 'rm -f "$$task_parity_bin"' EXIT; \
+	  cc -O2 -std=c11 -o "$$task_parity_bin" tests/parity_test.c 2>&1 && "$$task_parity_bin" 2>&1; } \
+	|| echo PARITY_FAILED)
+ifneq ($(findstring PARITY_FAILED,$(PARITY_OUT)),)
 $(error C solver test FAILED — build aborted:$(PARITY_OUT))
 endif
 $(info [parity] $(PARITY_OUT))
@@ -31,8 +35,8 @@ $(info [parity] $(PARITY_OUT))
 # ── Build-time Playdate Achievements alignment gate ────────────────────────
 # Pins Source/achievements.json to the vendored pd-achievements v1.0.0 schema
 # AND to the badge id set in Source/badges.lua. Any drift aborts the build.
-ACH_OUT := $(shell python3 tests/achievements_test.py 2>&1)
-ifeq ($(findstring ACHIEVEMENTS_OK,$(ACH_OUT)),)
+ACH_OUT := $(shell python3 tests/achievements_test.py 2>&1 || echo ACHIEVEMENTS_FAILED)
+ifneq ($(findstring ACHIEVEMENTS_FAILED,$(ACH_OUT)),)
 $(error Playdate Achievements alignment test FAILED — build aborted:$(ACH_OUT))
 endif
 $(info [achievements] $(ACH_OUT))
