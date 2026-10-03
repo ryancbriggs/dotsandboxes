@@ -1050,11 +1050,29 @@ local function evaluateForPlayer(board, rootPlayer, allowDX)
     return value
 end
 
+-- Evaluate one safe move, optionally checking the opponent's best safe
+-- replies. A zero peerLimit keeps the cheaper one-ply search on big boards.
+local function evaluateSafeEdge(board, edge, rootPlayer, peerLimit)
+    yieldIfBudgetExceeded()
+    local state = applyMove(board, edge)
+    local score = evaluateForPlayer(board, rootPlayer)
+    if peerLimit > 0 then
+        local peers = selectTopSafes(board, EdgeUtils.classify(board).safes, peerLimit)
+        for _, peerEdge in ipairs(peers) do
+            local peerState = applyMove(board, peerEdge)
+            local peerScore = evaluateForPlayer(board, rootPlayer)
+            undoMove(board, peerState)
+            if peerScore < score then score = peerScore end
+        end
+    end
+    undoMove(board, state)
+    return score
+end
+
 local SAFE_EVAL_LIMIT     <const> = 4
 local SAFE_AGGRO_LIMIT    <const> = 2
 local AGGRESSION_TEMP     <const> = 2.0
 local CLOSER_EVAL_LIMIT   <const> = 5
-local SAFE_DEPTH_LIMIT    <const> = 2
 local SAFE_DEPTH_MAX_DOTS <const> = 6
 local SACRIFICE_LIMIT     <const> = 4    -- a touch wider than the original 3
 local SACRIFICE_THRESHOLD <const> = 0.75
@@ -1271,36 +1289,12 @@ function Expert.chooseMove(board, snapshot)
     local safeCount = #snapshot.safes
 
     if safeCount > 0 then
-        local function evaluateSafeEdge(edge)
-            yieldIfBudgetExceeded()
-            local state = applyMove(board, edge)
-            local baseline = evaluateForPlayer(board, rootPlayer)
-            local adjusted = baseline
-
-            if SAFE_DEPTH_LIMIT > 0 and board.DOTS <= SAFE_DEPTH_MAX_DOTS then
-                local peerSnapshot = EdgeUtils.classify(board)
-                if #peerSnapshot.safes > 0 then
-                    local peers = selectTopSafes(board, peerSnapshot.safes, SAFE_EVAL_LIMIT)
-                    local peerWorst = math.huge
-                    for _, peerEdge in ipairs(peers) do
-                        local peerState = applyMove(board, peerEdge)
-                        local peerScore = evaluateForPlayer(board, rootPlayer)
-                        undoMove(board, peerState)
-                        if peerScore < peerWorst then peerWorst = peerScore end
-                    end
-                    adjusted = math.min(adjusted, peerWorst)
-                end
-            end
-
-            undoMove(board, state)
-            return adjusted
-        end
-
+        local peerLimit = (board.DOTS <= SAFE_DEPTH_MAX_DOTS) and SAFE_EVAL_LIMIT or 0
         local safeBestEdge, safeBestScore = nil, -math.huge
         local safeCandidates = selectExpertSafes(board, snapshot.safes)
         local safeEvaluations = {}
         for _, edge in ipairs(safeCandidates) do
-            local sc = evaluateSafeEdge(edge)
+            local sc = evaluateSafeEdge(board, edge, rootPlayer, peerLimit)
             safeEvaluations[#safeEvaluations + 1] = { edge = edge, score = sc }
         end
         local safeBest = pickExpertAggressiveTie(board, safeEvaluations)
@@ -1375,30 +1369,12 @@ function Hard.chooseMove(board, snapshot)
     end
 
     if #snapshot.safes > 0 then
-        local depth = (board.DOTS <= HARD_DEPTH2_MAX_DOTS) and 2 or 1
+        local peerLimit = (board.DOTS <= HARD_DEPTH2_MAX_DOTS) and HARD_SAFE_LIMIT or 0
         local candidates = selectTopSafes(board, snapshot.safes, HARD_SAFE_LIMIT)
 
         local evaluations = {}
         for _, edge in ipairs(candidates) do
-            yieldIfBudgetExceeded()
-            local state = applyMove(board, edge)
-            local score = evaluateForPlayer(board, rootPlayer)
-            if depth >= 2 then
-                local peerSnapshot = EdgeUtils.classify(board)
-                if #peerSnapshot.safes > 0 then
-                    local peers = selectTopSafes(board, peerSnapshot.safes, HARD_SAFE_LIMIT)
-                    local peerWorst = math.huge
-                    for _, peerEdge in ipairs(peers) do
-                        local peerState = applyMove(board, peerEdge)
-                        local peerScore = evaluateForPlayer(board, rootPlayer)
-                        undoMove(board, peerState)
-                        if peerScore < peerWorst then peerWorst = peerScore end
-                    end
-                    if peerWorst < score then score = peerWorst end
-                end
-            end
-            undoMove(board, state)
-
+            local score = evaluateSafeEdge(board, edge, rootPlayer, peerLimit)
             evaluations[#evaluations + 1] = { edge = edge, score = score }
         end
         local best = Heuristics.pickRandomBestByScore(evaluations)
