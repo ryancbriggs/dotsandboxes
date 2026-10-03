@@ -870,7 +870,14 @@ end
 
 local function addHotDXCandidates(board, candidates, seen)
     for _, comp in ipairs(collectHotComponents(board)) do
-        if comp.len >= 2 then
+        -- Take surplus boxes before handing back two from an opened chain
+        -- or four from an opened loop. An early cut can let the opponent
+        -- return the handout and keep control instead of taking everything.
+        local ends = 0
+        for box in pairs(comp.boxes) do
+            if EdgeUtils.countFilled(board, board.boxEdges[box]) == 3 then ends = ends + 1 end
+        end
+        if (comp.len == 2 and ends == 1) or (comp.len == 4 and ends == 2) then
             for _, edge in ipairs(hotDXCandidates(board, comp.boxes)) do
                 if not seen[edge] then
                     candidates[#candidates + 1] = edge

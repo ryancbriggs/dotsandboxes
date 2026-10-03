@@ -67,3 +67,13 @@ perfect play against other opponents. The 16-edge native version also completed
 five full Simulator games (320 moves); the 18-edge expansion passes a complete
 maximum-size oracle test and SDK builds, but its Simulator rerun was blocked
 by the host locking.
+
+#### Hardware loop-handout correction
+
+The 31–18 hardware game in `tests/fixtures/hardware_8x8.json` exposed premature
+loop handouts. Expert now takes surplus boxes before offering two from a chain
+or four from a loop. With exact search forced to time out, it wins the positions
+before moves 88 and 96 by 29–20 and 26–23 against exhaustive best play.
+Validation against `6c28c74`, seeds 7000–7059 on all five sizes: 376 wins,
+30 draws, 194 losses (65.2%); 8×8 alone: 103 wins, 17 losses (85.8%).
+These corrected decisions still need a fresh hardware timing check.

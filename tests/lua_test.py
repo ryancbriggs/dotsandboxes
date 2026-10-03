@@ -1,5 +1,6 @@
 import unittest
 import random
+import json
 from itertools import permutations
 
 from lua_helpers import ROOT, app, game, position
@@ -234,6 +235,27 @@ class LayoutTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_expert_finishes_loop_captures_before_handing_back_control(self):
+        replay = json.loads((ROOT / "tests/fixtures/hardware_8x8.json").read_text())
+        for native in (False, True):
+            lua, board, ai = game(native=native)
+            ai.setDifficulty("expert")
+            if native:
+                # Reproduce the device's exact-search timeout at move 96.
+                lua.execute("dotsai.exact_step=function() now=now+401; return nil end")
+            b = board.new(replay["dots"])
+            for move, edge in enumerate(replay["moves"], 1):
+                if move in (88, 96):
+                    with self.subTest(native=native, move=move):
+                        self.assertIn(ai.chooseMove(b), (59, 75) if move == 88 else (39, 86))
+                b.playEdge(b, edge)
+            self.assertEqual(list(b.score.values()), replay["score"])
+            # After three more captures, the four-box loop handout is correct.
+            ready = position(board, 8, [4,14,21,28,35,41,42,49,61,62,63,101,102,112])
+            ready.chainLen = 1
+            with self.subTest(native=native, handout="ready"):
+                self.assertEqual(ai.chooseMove(ready), 102)
+
     def test_expert_tactical_positions(self):
         cases = [
             ("17-edge tactic", [3,4,5,6,7,8,9,11,13,14,16,17,18,20,22,23,24], (4,)),
