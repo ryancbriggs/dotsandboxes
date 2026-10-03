@@ -22,7 +22,8 @@ Host timings are not a substitute for Playdate hardware measurements.
 #### Expert experiments
 
 Each change is tested against the preceding version with both seats swapped.
-Tuning uses seeds 0–19; validation uses a separate seed range on all five sizes.
+The retained changes use seeds 0–19 for tuning, then a separate validation
+seed range on all five sizes. Score rate counts a draw as half a win.
 The extra exact search gets 400 ms of wall time, leaving room for its fallback
 within the roughly half-second thinking allowance. Search yields between frames.
 
@@ -40,3 +41,28 @@ The 16-edge native search improved 78 of 300 pairs and worsened none, with a
 none (+1.59 boxes). The current table uses 256 KiB and advances at most 512
 states per C call; tests also check cancellation, interrupted searches, and
 restarting on new boards. Actual device timing still needs hardware measurement.
+
+Two wider opening policies were rejected: eight safe candidates scored 49.2%
+in 300 tuning games (seeds 0–29); checking two opponent replies on large boards
+scored 52.1% in 120 tuning games, then exactly 50% in 400 held-out games
+(7×7 and 8×8 dots, seeds 4000–4099), while increasing average host compute time.
+
+Final validation compares `aba3fbb` against the original Expert at `65eb5f7`,
+using seeds 5000–5099, 100 opening pairs per size:
+
+| Dots per side | Wins / draws / losses | Score rate | Mean box margin |
+| --- | --- | --- | --- |
+| 4 | 181 / 0 / 19 | 90.5% | +4.12 |
+| 5 | 125 / 30 / 45 | 70.0% | +3.51 |
+| 6 | 142 / 0 / 58 | 71.0% | +3.95 |
+| 7 | 121 / 9 / 70 | 62.8% | +3.27 |
+| 8 | 112 / 0 / 88 | 56.0% | +2.91 |
+| **All** | **681 / 39 / 280** | **70.1%** | **+3.55** |
+
+Reproduce with `python3 tests/ai_arena.py --baseline 65eb5f7 --candidate aba3fbb
+--start-seed 5000 --pairs 100 --jobs 3 --output /tmp/expert-final.json`.
+These are self-play results against previous versions, not a guarantee of
+perfect play against other opponents. The 16-edge native version also completed
+five full Simulator games (320 moves); the 18-edge expansion passes a complete
+maximum-size oracle test and SDK builds, but its Simulator rerun was blocked
+by the host locking.
