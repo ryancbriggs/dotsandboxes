@@ -24,25 +24,34 @@ local REPLAY_TICKS_PER_REV <const> = 24
 local REPLAY_TICKS_PER_MOVE <const> = 2
 
 -------------------------------------------------------------------------------
--- Build reverse look‑up for boxes (edge lookup lives on the board)
--------------------------------------------------------------------------------
-function UI:buildBoxToCoord()
-    self.boxToCoord = {}
-    local idx = 1
-    for r = 1, self.board.DOTS - 1 do
-        for c = 1, self.board.DOTS - 1 do
-            self.boxToCoord[idx] = { r, c }
-            idx = idx + 1
-        end
-    end
-end
-
--------------------------------------------------------------------------------
 -- Convert dot grid coords to pixel coords
 -------------------------------------------------------------------------------
 local function dotXY(self, r, c)
     return self.left + (c - 1) * self.spacing,
            self.top  + (r - 1) * self.spacing
+end
+
+-- Board geometry is fixed for the lifetime of this UI, including replay.
+function UI:buildGeometry()
+    self.dotPoints, self.edgeLines, self.boxCenters = {}, {}, {}
+    for r = 1, self.board.DOTS do
+        for c = 1, self.board.DOTS do
+            local x, y = dotXY(self, r, c)
+            self.dotPoints[#self.dotPoints + 1] = { x, y }
+            if r < self.board.DOTS and c < self.board.DOTS then
+                self.boxCenters[#self.boxCenters + 1] = {
+                    x + self.spacing * 0.5, y + self.spacing * 0.5
+                }
+            end
+        end
+    end
+    for edge, coord in ipairs(self.board.edgeToCoord) do
+        local x, y = dotXY(self, coord[1], coord[2])
+        local horizontal = coord[3] == self.board.H
+        self.edgeLines[edge] = { x, y,
+            x + (horizontal and self.spacing or 0),
+            y + (horizontal and 0 or self.spacing) }
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -70,16 +79,9 @@ end
 -- Cursor highlight box (transparent center, tinted by player)
 -------------------------------------------------------------------------------
 function UI:drawCursor(edge, owner)
-    local coords = self.board.edgeToCoord[edge or self.cursorEdge]
-    if not coords then return end
-    local rr, cc, dir = table.unpack(coords)
-    local x1, y1 = dotXY(self, rr, cc)
-    local x2, y2
-    if dir == self.board.H then
-        x2, y2 = dotXY(self, rr, cc + 1)
-    else
-        x2, y2 = dotXY(self, rr + 1, cc)
-    end
+    local line = self.edgeLines[edge or self.cursorEdge]
+    if not line then return end
+    local x1, y1, x2, y2 = table.unpack(line)
 
     local pad = 8
     local tx = math.min(x1, x2) - pad
@@ -130,9 +132,6 @@ function UI.new(board, opts)
     local d = opts.difficulty
     self.difficultyLabel = d and (d:sub(1, 1):upper() .. d:sub(2)) or nil
 
-    -- Build box lookup (edge lookup is on the board)
-    self:buildBoxToCoord()
-
     -- Spacing & offsets
     local screenW, screenH = playdate.display.getSize()
     local dots = board.DOTS
@@ -144,6 +143,7 @@ function UI.new(board, opts)
     self.left = SIDE_COL_W + math.floor((screenW - 2*SIDE_COL_W - boardSide) / 2)
     local availH = screenH - 2*V_PADDING
     self.top = V_PADDING + math.floor((availH - boardSide) / 2)
+    self:buildGeometry()
 
     -- Cursor
     self.cursorEdge = 1
@@ -261,24 +261,17 @@ function UI:draw()
     local p1Score, p2Score = view.score[1], view.score[2]
 
     -- Dots
-    for rr=1,self.board.DOTS do
-        for cc=1,self.board.DOTS do
-            local x,y = dotXY(self, rr, cc)
-            gfx.fillCircleAtPoint(x, y, DOT_SIZE)
-        end
+    for _, point in ipairs(self.dotPoints) do
+        gfx.fillCircleAtPoint(point[1], point[2], DOT_SIZE)
     end
 
     -- Edges
     for e = 1, #self.board.edgeToCoord do
         if view.edgesFilled[e] then
-            local rr, cc, d = table.unpack(self.board.edgeToCoord[e])
-            local x1, y1 = dotXY(self, rr, cc)
-            local x2, y2
-            if d == self.board.H then x2,y2 = dotXY(self, rr, cc+1)
-            else x2,y2 = dotXY(self, rr+1, cc) end
+            local line = self.edgeLines[e]
             local owner = view.edgeOwner[e] or 1
             gfx.setDitherPattern(owner==2 and 0.5 or 0)
-            drawThickLine(x1,y1,x2,y2)
+            drawThickLine(line[1], line[2], line[3], line[4])
             gfx.setDitherPattern(0)
         end
     end
@@ -286,7 +279,7 @@ function UI:draw()
     -- Claimed boxes: animated expand-and-settle square
     local nowMs = playdate.getCurrentTimeMilliseconds()
     local baseSize = math.floor(self.spacing * 0.5)
-    for id, bc in ipairs(self.boxToCoord) do
+    for id, center in ipairs(self.boxCenters) do
         local owner = view.boxOwner[id]
         if owner then
             local scale = 1
@@ -311,12 +304,8 @@ function UI:draw()
 
             local size = math.floor(baseSize * scale)
             if size < 1 then size = 1 end
-            local boxX = self.left + (bc[2] - 1) * self.spacing
-            local boxY = self.top  + (bc[1] - 1) * self.spacing
-            local cx = boxX + self.spacing * 0.5
-            local cy = boxY + self.spacing * 0.5
-            local x = math.floor(cx - size * 0.5)
-            local y = math.floor(cy - size * 0.5)
+            local x = math.floor(center[1] - size * 0.5)
+            local y = math.floor(center[2] - size * 0.5)
 
             gfx.setDitherPattern(owner == 2 and 0.5 or 0)
             gfx.fillRect(x, y, size, size)
