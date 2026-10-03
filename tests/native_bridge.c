@@ -12,6 +12,15 @@ int test_solve(const unsigned char* chains, int nc,
 }
 
 static ColdTopo topology;
+static EdgeSearch exact;
+
+int test_exact_begin(const uint8_t* edges, int count) {
+    return edge_search_begin(&exact, &topology, edges, count);
+}
+
+int test_exact_step(unsigned states) { return edge_search_step(&exact, states); }
+int test_exact_value(void) { return exact.values[exact.full]; }
+unsigned test_exact_next(void) { return exact.next; }
 
 void test_cold_init(int boxes, int edges, const uint8_t* be, const uint8_t* eb) {
     memset(&topology, 0, sizeof(topology));

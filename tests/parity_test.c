@@ -306,16 +306,64 @@ static void check_large_cold_memo(void) {
     }
 }
 
+// Independent oracle: play each edge on a filled-array board and recurse.
+// No bit masks, memo table, or component assumptions are shared with the kernel.
+static int ref_edges(const RefTopo* t, uint8_t* filled, const uint8_t* edges, int n) {
+    int best = -127;
+    for (int i = 0; i < n; i++) {
+        int e = edges[i];
+        if (filled[e]) continue;
+        filled[e] = 1;
+        int gain = 0;
+        for (int j = 0; j < 2; j++) {
+            int b = t->eb[e][j];
+            if (b && filled[t->be[b][0]] && filled[t->be[b][1]]
+                  && filled[t->be[b][2]] && filled[t->be[b][3]]) gain++;
+        }
+        int rest = ref_edges(t, filled, edges, n);
+        int value = gain ? gain + rest : -rest;
+        filled[e] = 0;
+        if (value > best) best = value;
+    }
+    return best == -127 ? 0 : best;
+}
+
+static void check_exact_edges(void) {
+    ColdTopo topo; RefTopo ref;
+    static EdgeSearch search;
+    for (int iter = 0; iter < 300; iter++) {
+        build_topo(4 + rnd(5), &topo, &ref);
+        uint8_t filled[DOTSAI_MAX_EDGES + 1], edges[7];
+        memset(filled, 1, sizeof(filled));
+        int n = 1 + rnd(7);
+        for (int i = 0; i < n; i++) {
+            int e;
+            do { e = 1 + rnd(topo.numEdges); } while (!filled[e]);
+            filled[e] = 0;
+            edges[i] = (uint8_t)e;
+        }
+        int expected = ref_edges(&ref, filled, edges, n);
+        if (!edge_search_begin(&search, &topo, edges, n)) { fail = 1; return; }
+        while (!edge_search_step(&search, 13)) {}
+        if (search.values[search.full] != expected) {
+            fprintf(stderr, "[parity] edge search mismatch: got=%d expected=%d\n",
+                    search.values[search.full], expected);
+            fail = 1; return;
+        }
+    }
+}
+
 int main(void) {
     check_solve();
     check_cold();
     check_full_memo();
     check_large_cold_memo();
     check_two_chain_opening();
+    check_exact_edges();
     if (fail) {
         fprintf(stderr, "[parity] FAILED — C kernels diverged from reference\n");
         return 1;
     }
-    printf("PARITY_OK solve+cold (90000 fuzz cases)\n");
+    printf("PARITY_OK solve+cold+edges (90300 fuzz cases)\n");
     return 0;
 }

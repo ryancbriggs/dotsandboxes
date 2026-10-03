@@ -559,47 +559,59 @@ local function coldOpeningEdge(board, comp)
     return comp.edge
 end
 
--- Search actual remaining edges when small enough (at most 2^14 states),
--- including extra turns after captures, without mutating the live board.
--- Larger junction positions use a bounded, explicitly approximate policy:
--- open the edge that gives away the fewest immediately collectable boxes.
-local function endgameEdgeSearch(board, free, deadline)
-    if #free > 14 then
-        local bestEdge, bestLoss = free[1], math.huge
-        for _, first in ipairs(free) do
-            yieldIfBudgetExceeded()
-            local used, counts = {}, {}
-            for b, edges in ipairs(board.boxEdges) do
-                counts[b] = 4 - EdgeUtils.countFilled(board, edges)
-            end
-            local function play(edge)
-                used[edge] = true
-                local claimed = 0
-                for _, b in ipairs(board.edgeBoxes[edge]) do
-                    counts[b] = counts[b] - 1
-                    if counts[b] == 0 then claimed = claimed + 1 end
-                end
-                return claimed
-            end
-            play(first)
-            local loss = 0
-            while true do
-                local closer
-                for _, edge in ipairs(free) do
-                    if not used[edge] then
-                        for _, b in ipairs(board.edgeBoxes[edge]) do
-                            if counts[b] == 1 then closer = edge; break end
-                        end
-                    end
-                    if closer then break end
-                end
-                if not closer then break end
-                loss = loss + play(closer)
-            end
-            if loss < bestLoss then bestEdge, bestLoss = first, loss end
+-- Bounded fallback for junctions: give away as few immediately collectable
+-- boxes as possible. This is approximate; independent-chain theory is invalid.
+local function approximateJunctionOpening(board, free)
+    local bestEdge, bestLoss = free[1], math.huge
+    for _, first in ipairs(free) do
+        yieldIfBudgetExceeded()
+        local used, counts = {}, {}
+        for b, edges in ipairs(board.boxEdges) do
+            counts[b] = 4 - EdgeUtils.countFilled(board, edges)
         end
-        return bestEdge
+        local function play(edge)
+            used[edge] = true
+            local claimed = 0
+            for _, b in ipairs(board.edgeBoxes[edge]) do
+                counts[b] = counts[b] - 1
+                if counts[b] == 0 then claimed = claimed + 1 end
+            end
+            return claimed
+        end
+        play(first)
+        local loss = 0
+        while true do
+            local closer
+            for _, edge in ipairs(free) do
+                if not used[edge] then
+                    for _, b in ipairs(board.edgeBoxes[edge]) do
+                        if counts[b] == 1 then closer = edge; break end
+                    end
+                end
+                if closer then break end
+            end
+            if not closer then break end
+            loss = loss + play(closer)
+        end
+        if loss < bestLoss then bestEdge, bestLoss = first, loss end
     end
+    return bestEdge
+end
+
+-- Exact future box margin, including extra turns, on a separate edge mask.
+-- Native batches search up to 16 free edges; the Lua fallback caps at 14.
+-- No result is used unless the search finishes within its wall-time budget.
+local function endgameEdgeSearch(board, free, deadline)
+    if #free <= 16 and dotsai and dotsai.exact_begin and dotsai.exact_step
+        and ensureColdTopo(board) and dotsai.exact_begin(string.char(table.unpack(free))) then
+        while true do
+            yieldIfBudgetExceeded()
+            if deadline and nowMs() >= deadline then return nil end
+            local edge = dotsai.exact_step()
+            if edge then return edge end
+        end
+    end
+    if #free > 14 then return nil end
 
     local bits, masks = {}, {}
     for i, edge in ipairs(free) do bits[edge] = 1 << (i - 1) end
@@ -652,7 +664,8 @@ function Endgame.berlekampSolver(board, snapshot)
     for _, comp in ipairs(comps) do represented = represented + comp.len end
     local remaining = #board.boxEdges - board.score[1] - board.score[2]
     if represented ~= remaining then
-        return endgameEdgeSearch(board, snapshot.free)
+        return endgameEdgeSearch(board, snapshot.free, nowMs() + EXPERT_EXACT_BUDGET_MS)
+            or approximateJunctionOpening(board, snapshot.free)
     end
     if #comps == 0 then
         return snapshot.free[math.random(#snapshot.free)]
@@ -1198,7 +1211,8 @@ function Expert.chooseMove(board, snapshot)
 
     -- Mixed positions need real move order, not independent-chain estimates.
     -- Keep the faster component solver for already-cold endgames.
-    if #snapshot.free <= 12 and (#snapshot.closers > 0 or #snapshot.safes > 0) then
+    local exactLimit = (dotsai and dotsai.exact_begin and dotsai.exact_step) and 16 or 12
+    if #snapshot.free <= exactLimit and (#snapshot.closers > 0 or #snapshot.safes > 0) then
         local edge = endgameEdgeSearch(board, snapshot.free, nowMs() + EXPERT_EXACT_BUDGET_MS)
         if edge then return edge end
     end

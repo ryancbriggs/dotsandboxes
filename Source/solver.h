@@ -1,11 +1,11 @@
 //
 // solver.h — Pure C dots-and-boxes kernels, free of any Playdate API.
 //
-// Two algorithms, each a faithful port of the audited Lua reference in
-// Source/ai.lua:
+// Kernels with readable Lua counterparts in Source/ai.lua:
 //
 //   solve()           ←→ solveComponents() + componentOpenValue()
 //   cold_decompose()  ←→ Components.collectCold()
+//   edge_search_*()  ←→ endgameEdgeSearch() (incremental exhaustive minimax)
 //
 // "Pure" means: no pd_api.h, no globals beyond the solve memo, deterministic.
 // This header is #included by Source/main.c (the Playdate extension) and by
@@ -230,6 +230,68 @@ static int cold_decompose(ColdTopo* t, const uint8_t* filled,
         n++;
     }
     return n;
+}
+
+// ─── Exact remaining-edge search ──────────────────────────────────────────
+// Every child removes a bit, so increasing mask order visits children first.
+// Values are future box margins for the player to move; captures keep the
+// turn. Scores fit in int8_t (at most 49 boxes), using 64 KiB at 16 free edges.
+// The caller owns the workspace and advances it in small, interruptible batches.
+#define DOTSAI_EXACT_MAX_EDGES 16
+
+typedef struct {
+    int8_t values[1u << DOTSAI_EXACT_MAX_EDGES];
+    uint32_t masks[DOTSAI_EXACT_MAX_EDGES][2];
+    uint8_t edges[DOTSAI_EXACT_MAX_EDGES];
+    uint32_t next, full;
+    int bestEdge;
+} EdgeSearch;
+
+static int edge_search_begin(EdgeSearch* s, const ColdTopo* t,
+                             const uint8_t* freeEdges, int count) {
+    s->next = s->full = 0;
+    s->bestEdge = 0;
+    if (!freeEdges || count < 1 || count > DOTSAI_EXACT_MAX_EDGES) return 0;
+    uint32_t bits[DOTSAI_MAX_EDGES + 1] = {0};
+    uint32_t boxes[DOTSAI_MAX_BOXES + 1] = {0};
+    for (int i = 0; i < count; i++) {
+        int edge = freeEdges[i];
+        if (edge < 1 || edge > t->numEdges || bits[edge]) return 0;
+        bits[edge] = 1u << i;
+        s->edges[i] = (uint8_t)edge;
+    }
+    for (int b = 1; b <= t->numBoxes; b++)
+        for (int k = 0; k < 4; k++) boxes[b] |= bits[t->boxEdges[b][k]];
+    for (int i = 0; i < count; i++)
+        for (int j = 0; j < 2; j++)
+            s->masks[i][j] = boxes[t->edgeBoxes[s->edges[i]][j]];
+    s->values[0] = 0;
+    s->next = 1;
+    s->full = (1u << count) - 1;
+    return 1;
+}
+
+// Returns the best edge only when the whole search is complete, else 0.
+// A new begin discards a previous partial search without clearing the table:
+// all dependencies are overwritten before they can be read again.
+static int edge_search_step(EdgeSearch* s, unsigned states) {
+    if (!s->next) return 0;
+    while (states-- && s->next <= s->full) {
+        uint32_t remaining = s->next++;
+        int best = -127, bestIndex = 0;
+        for (uint32_t choices = remaining; choices; choices &= choices - 1) {
+            unsigned i = (unsigned)__builtin_ctz(choices);
+            uint32_t bit = 1u << i;
+            int gained = ((remaining & s->masks[i][0]) == bit)
+                       + ((remaining & s->masks[i][1]) == bit);
+            int rest = s->values[remaining ^ bit];
+            int value = gained ? gained + rest : -rest;
+            if (value > best) { best = value; bestIndex = (int)i; }
+        }
+        s->values[remaining] = (int8_t)best;
+        if (remaining == s->full) s->bestEdge = s->edges[bestIndex];
+    }
+    return s->bestEdge;
 }
 
 #endif // DOTSAI_SOLVER_H

@@ -28,6 +28,12 @@ def native_solver():
                                           ctypes.c_char_p, ctypes.c_char_p]
         _native.test_cold.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p]
         _native.test_cold.restype = ctypes.c_int
+        _native.test_exact_begin.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        _native.test_exact_begin.restype = ctypes.c_int
+        _native.test_exact_step.argtypes = [ctypes.c_uint]
+        _native.test_exact_step.restype = ctypes.c_int
+        _native.test_exact_value.restype = ctypes.c_int
+        _native.test_exact_next.restype = ctypes.c_uint
     return _native
 
 
@@ -55,6 +61,9 @@ def game(native=False, source=None):
                                     excluded.encode("latin1") if excluded else None, output)
             return output.raw[:count]
         lua.globals().dotsai.cold = cold
+        lua.globals().dotsai.exact_begin = lambda edges: bool(kernel.test_exact_begin(
+            edges.encode("latin1"), len(edges)))
+        lua.globals().dotsai.exact_step = lambda: kernel.test_exact_step(512) or None
     board = lua.execute((ROOT / "Source/board.lua").read_text())
     ai = lua.execute(source if source is not None else (ROOT / "Source/ai.lua").read_text())
     return lua, board, ai

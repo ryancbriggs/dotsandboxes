@@ -9,7 +9,7 @@ from build_test import sdk_path
 
 class SchedulerTests(unittest.TestCase):
     def test_expert_abandons_slow_exact_search_with_a_clean_board(self):
-        lua, board, ai = game(native=True)
+        lua, board, ai = game()
         free = [1, 8, 11, 13, 14, 15, 19, 20, 21, 22, 24]
         b = position(board, 4, free)
         filled, score = set(b.edgesFilled.keys()), list(b.score.values())
@@ -32,6 +32,42 @@ class SchedulerTests(unittest.TestCase):
         # A timed-out search must not poison the next move's result/cache.
         lua.execute("playdate.getCurrentTimeMilliseconds = function() return now end")
         self.assertEqual(ai.chooseMove(b), 24)
+
+    def test_native_exact_search_times_out_and_can_be_cancelled_or_restarted(self):
+        lua, board, ai = game(native=True)
+        free = [2, 4, 6, 7, 8, 9, 10, 12, 14, 16, 17, 18, 23]
+        b = position(board, 4, free)
+        filled, score = set(b.edgesFilled.keys()), list(b.score.values())
+        ai.setDifficulty("expert")
+        lua.execute('''
+            exactStep=dotsai.exact_step; exactSteps=0
+            dotsai.exact_step=function()
+                exactSteps=exactSteps+1; now=now+60
+                return exactStep()
+            end
+        ''')
+        ai.beginChooseMove(b, True)
+        done, _ = ai.tick()
+        self.assertFalse(done)
+        ai.cancel()
+        self.assertFalse(ai.isThinking())
+        self.assertEqual(set(b.edgesFilled.keys()), filled)
+        lua.globals().now = 0
+        lua.globals().exactSteps = 0
+        ai.beginChooseMove(b, True)
+        for _ in range(12):
+            done, edge = ai.tick()
+            self.assertEqual(set(b.edgesFilled.keys()), filled)
+            self.assertEqual(list(b.score.values()), score)
+            if done:
+                break
+            lua.globals().now += 50
+        self.assertTrue(done)
+        self.assertIn(edge, free)
+        self.assertLess(lua.globals().now, 600)
+        self.assertLess(lua.globals().exactSteps, 16, "must stop before completing the search")
+        lua.execute("dotsai.exact_step=exactStep")
+        self.assertEqual(ai.chooseMove(b), 12)
 
     def test_expert_does_not_evaluate_disallowed_root_sacrifices(self):
         lua, board, ai = game()
@@ -228,6 +264,16 @@ class LayoutTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_native_expert_sees_past_the_old_endgame_horizon(self):
+        free = [2, 4, 6, 7, 8, 9, 10, 12, 14, 16, 17, 18, 23]
+        values = edge_values(4, free)
+        self.assertEqual(values[12], 7)
+        self.assertEqual(values[7], -1)
+        _, board, ai = game(native=True)
+        b = position(board, 4, free)
+        ai.setDifficulty("expert")
+        self.assertEqual(ai.chooseMove(b), 12)
+
     def test_mixed_endgames_match_independent_exhaustive_search(self):
         rng = random.Random(5486)
         for dots in range(4, 9):

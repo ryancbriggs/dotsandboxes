@@ -29,7 +29,11 @@ within the roughly half-second thinking allowance. Search yields between frames.
 | Change | Baseline | Validation seeds | Wins / draws / losses | Score rate |
 | --- | --- | --- | --- | --- |
 | Solve mixed endgames with up to 12 free edges | `65eb5f7` | 1000–1059 | 320 / 33 / 247 | 56.1% |
+| Native search extending the horizon to 16 free edges | `0377832` | 2000–2059 | 361 / 30 / 209 | 62.7% |
 
 The first experiment improved 40 of 300 paired openings and worsened none;
 mean score margin was +1.40 boxes. The regression suite also checks choices
 against independent exhaustive minimax and exercises timeout recovery.
+The native search improved 78 of 300 pairs and worsened none, with a +1.97 box
+margin. Its table uses 64 KiB and advances at most 512 states per C call; the
+tests also check cancellation, interrupted searches, and restarting on new boards.

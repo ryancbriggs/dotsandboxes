@@ -6,6 +6,8 @@
 //   dotsai.solve(chains, loops)     endgame value (byte-string component lens)
 //   dotsai.cold_init(dots, be, eb)  send static board topology once per game
 //   dotsai.cold(filled, excluded)   cold-component decomposition for a position
+//   dotsai.exact_begin(freeEdges)   start an exact remaining-edge search
+//   dotsai.exact_step()             advance one batch; nil until complete
 //
 // All algorithmic logic lives in solver.h (pure C, no Playdate deps) so the
 // exact same code is exercised by the build-time parity test. This file only
@@ -23,6 +25,7 @@ static PlaydateAPI* pd = NULL;
 // Resident board topology, set by dotsai.cold_init at game start.
 static ColdTopo s_topo;
 static int      s_topo_ready = 0;
+static EdgeSearch s_exact;
 
 // ─── solve bindings ─────────────────────────────────────────────────────────
 
@@ -138,6 +141,28 @@ static int lua_cold(lua_State* L) {
     return 1;
 }
 
+static int lua_exact_begin(lua_State* L) {
+    (void)L;
+    size_t count = 0;
+    const char* edges = pd->lua->getArgBytes(1, &count);
+    s_exact.next = s_exact.full = 0;
+    s_exact.bestEdge = 0;
+    int ok = s_topo_ready && count <= DOTSAI_EXACT_MAX_EDGES
+        && edge_search_begin(&s_exact, &s_topo, (const uint8_t*)edges, (int)count);
+    pd->lua->pushBool(ok);
+    return 1;
+}
+
+static int lua_exact_step(lua_State* L) {
+    (void)L;
+    // Bound each C call; Lua checks its frame slice and wall deadline between
+    // batches. No Playdate API is called from inside the portable solver.
+    int edge = edge_search_step(&s_exact, 512);
+    if (edge) pd->lua->pushInt(edge);
+    else pd->lua->pushNil();
+    return 1;
+}
+
 // ─── Entry point ────────────────────────────────────────────────────────────
 
 #ifdef _WINDLL
@@ -156,6 +181,10 @@ int eventHandler(PlaydateAPI* playdate, PDSystemEvent event, uint32_t arg) {
             pd->system->logToConsole("dotsai.cold_init: %s", err ? err : "?");
         if (!pd->lua->addFunction(lua_cold, "dotsai.cold", &err))
             pd->system->logToConsole("dotsai.cold: %s", err ? err : "?");
+        if (!pd->lua->addFunction(lua_exact_begin, "dotsai.exact_begin", &err))
+            pd->system->logToConsole("dotsai.exact_begin: %s", err ? err : "?");
+        if (!pd->lua->addFunction(lua_exact_step, "dotsai.exact_step", &err))
+            pd->system->logToConsole("dotsai.exact_step: %s", err ? err : "?");
     }
     return 0;
 }
