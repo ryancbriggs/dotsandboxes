@@ -74,6 +74,21 @@ class CompletionTests(unittest.TestCase):
 
 
 class PersistenceTests(unittest.TestCase):
+    def test_system_menu_saves_settings_from_reset_confirmation(self):
+        lua, main = app()
+        main.setState("settings")
+        lua.execute("pressed={Right=true}")
+        main.settingsInput()
+        self.assertEqual(main.settings.numDots, 7)
+        lua.execute("pressed={Down=true}")
+        for _ in range(3):
+            main.settingsInput()
+        lua.execute("pressed={A=true}")
+        main.settingsInput()
+        self.assertEqual(main.getState(), "statsResetConfirm")
+        main.returnMenu()
+        self.assertEqual(list(lua.globals().writes.values()), ["settings"])
+
     def test_version_one_saves_drop_retired_badges_but_preserve_stats(self):
         lua, _, _ = game()
         lua.execute('''

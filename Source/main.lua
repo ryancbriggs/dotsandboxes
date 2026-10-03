@@ -162,7 +162,7 @@ math.random()
 
 -- helpers ------------------------------------------------------------------
 local function returnToMainMenu()
-    if appState == "settings" then
+    if appState == "settings" or appState == "statsResetConfirm" then
         playdate.datastore.write(settings, "settings")
     end
     Ai.cancel()
