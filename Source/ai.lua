@@ -480,7 +480,6 @@ local function negamax(vals, cache)
         vals[n] = vals[i]
         vals[i] = v
         if score > best then best = score end
-        if best >= 0 then break end
     end
 
     cache[key] = best

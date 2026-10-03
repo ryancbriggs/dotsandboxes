@@ -1,6 +1,7 @@
 import unittest
+from itertools import permutations
 
-from lua_helpers import app, game, position
+from lua_helpers import ROOT, app, game, position
 
 
 class SchedulerTests(unittest.TestCase):
@@ -45,6 +46,17 @@ class CompletionTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_negamax_searches_past_a_nonnegative_candidate(self):
+        lua, _, _ = game()
+        source = (ROOT / "Source/ai.lua").read_text()
+        # Expose the production local only in this test chunk.
+        negamax = lua.execute(source.rsplit("return Ai", 1)[0] + "return negamax")
+        for values in set(permutations([-4, -4, -5])):
+            with self.subTest(values=values):
+                cache = lua.table()
+                self.assertEqual(negamax(lua.table_from(values), cache), 5)
+                self.assertEqual(negamax(lua.table_from(values), cache), 5)
+
     def test_component_scores_stay_attached_to_their_edges(self):
         for difficulty in ("medium", "hard"):
             with self.subTest(difficulty=difficulty):
