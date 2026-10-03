@@ -7,15 +7,6 @@
 
 local Geometry = {}
 
-function Geometry.boxesPerRow(dots) return dots - 1 end
-
--- 1-based (row, col) of a boxId on a `dots`-dot board.
-function Geometry.rowCol(dots, boxId)
-    local per = dots - 1
-    local idx = boxId - 1
-    return math.floor(idx / per) + 1, (idx % per) + 1
-end
-
 -- The four corner boxIds: {top-left, top-right, bottom-left, bottom-right}.
 function Geometry.cornerBoxes(dots)
     local per = dots - 1

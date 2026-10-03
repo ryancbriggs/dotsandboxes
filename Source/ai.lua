@@ -91,14 +91,12 @@ end
 function EdgeUtils.classify(board)
     local _t = Ai.debugLogging and profClock() or nil
     local snapshot = {
-        free    = {},
+        free    = board:listFreeEdges(),
         closers = {},
         safes   = {}
     }
 
-    for _, edge in ipairs(board:listFreeEdges()) do
-        table.insert(snapshot.free, edge)
-
+    for _, edge in ipairs(snapshot.free) do
         local closesBox, isSafe = false, true
         for _, boxId in ipairs(board.edgeBoxes[edge] or {}) do
             local filled = EdgeUtils.countFilled(board, board.boxEdges[boxId])
@@ -458,39 +456,19 @@ local function compValue(comp)
     return comp.isLoop and -1 or (4 - comp.len)
 end
 
-local function multisetKey(vals)
-    -- Canonicalize only the key: callers restore the live array by index and
-    -- keep a parallel array of physical component edges.
+local function componentDraftValue(vals)
+    -- In this static heuristic, each player takes the lowest remaining value.
+    -- Sort a copy so root scores stay attached to their physical entry edges.
     local sorted = { table.unpack(vals) }
-    table.sort(sorted, function(a, b) return a > b end)
-    return table.concat(sorted, ",")
-end
-
-local function negamax(vals, cache)
-    yieldIfBudgetExceeded()
-    if #vals == 0 then return 0 end
-    local key = multisetKey(vals)
-    if cache[key] then return cache[key] end
-    local best = -64
-    local n = #vals
-    -- Swap-and-pop: move the chosen element to the end and shrink virtually
-    -- by nil-ing the last slot, then restore both slots after the recursion.
-    -- Avoids the O(n) shift table.remove/insert incur from the middle.
-    for i = 1, n do
-        local v = vals[i]
-        vals[i] = vals[n]
-        vals[n] = nil
-        local score = -negamax(vals, cache) - v
-        vals[n] = vals[i]
-        vals[i] = v
-        if score > best then best = score end
+    table.sort(sorted)
+    local score = 0
+    for i, value in ipairs(sorted) do
+        score = score + (i % 2 == 0 and value or -value)
     end
-
-    cache[key] = best
-    return best
+    return score
 end
 
-function Endgame.negamaxSolver(board, snapshot)
+function Endgame.componentHeuristic(board, snapshot)
     snapshot = snapshot or EdgeUtils.classify(board)
     if #snapshot.closers > 0 then
         return snapshot.closers[math.random(#snapshot.closers)]
@@ -509,14 +487,14 @@ function Endgame.negamaxSolver(board, snapshot)
         vals[idx], edges[idx] = compValue(comp), comp.edge
     end
 
-    local cache, bestScore, bestIndices = {}, -math.huge, {}
+    local bestScore, bestIndices = -math.huge, {}
     local n = #vals
     for i = 1, n do
         yieldIfBudgetExceeded()
         local value = vals[i]
         vals[i] = vals[n]
         vals[n] = nil
-        local score = -negamax(vals, cache) - value
+        local score = -componentDraftValue(vals) - value
         vals[n] = vals[i]
         vals[i] = value
         if score > bestScore then
@@ -698,7 +676,7 @@ function Endgame.berlekampSolver(board, snapshot)
     end
 
     if #bestComps == 0 then
-        return Endgame.negamaxSolver(board, snapshot)
+        return Endgame.componentHeuristic(board, snapshot)
     end
 
     -- Deterministic tie-break: among equal-value cold openings, give the
@@ -1224,13 +1202,6 @@ function Expert.chooseMove(board, snapshot)
         end
 
         local bestEdge, bestScore = nil, -math.huge
-        -- [AI DX] diagnostic logging — disabled but kept for future debugging.
-        -- Re-enable by uncommenting this line and the print block below; the
-        -- per-iteration `if closerLog/dxLog` appends are dormant no-ops while
-        -- these stay nil.
-        local closerLog, dxLog
-        -- if Ai.debugLogging then closerLog, dxLog = {}, {} end
-
         -- 1) Greedy chain continuation: take a closer.
         local candidates = snapshot.closers
         if midChain then
@@ -1243,52 +1214,15 @@ function Expert.chooseMove(board, snapshot)
             local state = applyMove(board, edge)
             local score = evaluateForPlayer(board, rootPlayer, not midChain)
             undoMove(board, state)
-            if closerLog then closerLog[#closerLog + 1] = edge .. "=" .. score end
             if score > bestScore then
                 bestScore, bestEdge = score, edge
             end
         end
 
-        -- 2) Double-cross setup: a non-closer entry edge of a cold cluster
-        -- that's adjacent to one of the current closers. Playing it flips
-        -- the turn, leaving the opponent with a 2-domino instead of the
-        -- whole chain. The evaluator (with Berlekamp) will score this
-        -- correctly; we just have to put it in the choice set.
-        local closerLookup = {}
-        for _, e in ipairs(snapshot.closers) do closerLookup[e] = true end
-
+        -- 2) Double-cross setup: try non-closing edges in the hot region.
+        -- This includes cold entry edges connected to a current closer.
         local dxCandidates, seenDX = {}, {}
-        local function addDXCandidate(e)
-            if not seenDX[e] then
-                dxCandidates[#dxCandidates + 1] = e
-                seenDX[e] = true
-            end
-        end
-
-        -- The current hot chain itself can contain the actual double-cross
-        -- move: a non-closing edge inside the hot region. Those edges are not
-        -- part of Components.cold(board), so include them explicitly and score
-        -- them before capped cold-entry candidates.
         addHotDXCandidates(board, dxCandidates, seenDX)
-
-        local comps = Components.cold(board)
-        for _, comp in ipairs(comps) do
-            if comp.entryEdges and #comp.entryEdges >= 2 then
-                local hasCloserEntry, nonCloserEntries = false, {}
-                for _, e in ipairs(comp.entryEdges) do
-                    if closerLookup[e] then
-                        hasCloserEntry = true
-                    else
-                        nonCloserEntries[#nonCloserEntries + 1] = e
-                    end
-                end
-                if hasCloserEntry then
-                    for _, e in ipairs(nonCloserEntries) do
-                        addDXCandidate(e)
-                    end
-                end
-            end
-        end
 
         local dxLimit = math.min(midChain and 1 or 4, #dxCandidates)
         for i = 1, dxLimit do
@@ -1297,21 +1231,10 @@ function Expert.chooseMove(board, snapshot)
             local state = applyMove(board, edge)
             local score = evaluateForPlayer(board, rootPlayer, false)
             undoMove(board, state)
-            if dxLog then dxLog[#dxLog + 1] = edge .. "=" .. score end
             if score >= bestScore then
                 bestScore, bestEdge = score, edge
             end
         end
-
-        -- [AI DX] diagnostic print — disabled, kept for future debugging.
-        -- if Ai.debugLogging and dxLog and #dxLog > 0 then
-        --     local hotCount = #collectHotComponents(board)
-        --     print(string.format(
-        --         "[AI DX] hot=%d pick=%s score=%s closers=[%s] dx=[%s]",
-        --         hotCount, tostring(bestEdge), tostring(bestScore),
-        --         table.concat(closerLog, ","), table.concat(dxLog, ",")
-        --     ))
-        -- end
 
         return bestEdge
     end
@@ -1411,7 +1334,7 @@ function Hard.chooseMove(board, snapshot)
         if best then return best.edge end
     end
 
-    return Endgame.negamaxSolver(board, snapshot)
+    return Endgame.componentHeuristic(board, snapshot)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1473,7 +1396,7 @@ Strategies.medium = function(board)
         -- Bold: play the most central safe edge (top-2 random for variety).
         return StrategyUtils.pickTopKRandom(board, snapshot.safes, centralityScore, 2)
     end
-    return Endgame.negamaxSolver(board, snapshot)
+    return Endgame.componentHeuristic(board, snapshot)
 end
 
 Strategies.hard = function(board)

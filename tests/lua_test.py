@@ -373,16 +373,16 @@ class EndgameTests(unittest.TestCase):
                 ai.setDifficulty("expert")
                 self.assertEqual(ai.chooseMove(b), 6)
 
-    def test_negamax_searches_past_a_nonnegative_candidate(self):
+    def test_component_draft_value_does_not_depend_on_input_order(self):
         lua, _, _ = game()
         source = (ROOT / "Source/ai.lua").read_text()
         # Expose the production local only in this test chunk.
-        negamax = lua.execute(source.rsplit("return Ai", 1)[0] + "return negamax")
+        draft = lua.execute(source.rsplit("return Ai", 1)[0] + "return componentDraftValue")
         for values in set(permutations([-4, -4, -5])):
             with self.subTest(values=values):
-                cache = lua.table()
-                self.assertEqual(negamax(lua.table_from(values), cache), 5)
-                self.assertEqual(negamax(lua.table_from(values), cache), 5)
+                components = lua.table_from(values)
+                self.assertEqual(draft(components), 5)
+                self.assertEqual(list(components.values()), list(values))
 
     def test_component_scores_stay_attached_to_their_edges(self):
         for difficulty in ("medium", "hard"):
