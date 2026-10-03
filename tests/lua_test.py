@@ -46,6 +46,14 @@ class CompletionTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_expert_opens_two_chain_internally(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                _, board, ai = game(native=native)
+                b = position(board, 4, [4, 6, 7, 12, 13, 16, 20, 22, 23])
+                ai.setDifficulty("expert")
+                self.assertEqual(ai.chooseMove(b), 6)
+
     def test_negamax_searches_past_a_nonnegative_candidate(self):
         lua, _, _ = game()
         source = (ROOT / "Source/ai.lua").read_text()

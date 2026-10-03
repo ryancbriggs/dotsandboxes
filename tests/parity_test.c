@@ -50,7 +50,9 @@ static int ref_solve(RefState* s) {
         int nv = ref_solve(s);
         s->chains[len]++;
         int worst = -len - nv;
-        if (len >= 2) { int keep = -(len - 4) + nv; if (keep < worst) worst = keep; }
+        // An internal opening of a two-chain forces both captures; only
+        // longer chains permit the consumer's two-box handout.
+        if (len >= 3) { int keep = -(len - 4) + nv; if (keep < worst) worst = keep; }
         if (worst > best) best = worst;
     }
     for (int len = 1; len <= DOTSAI_MAX_LEN; len++) {
@@ -263,6 +265,16 @@ static void check_full_memo(void) {
     solver_reset();
 }
 
+static void check_two_chain_opening(void) {
+    CompState state = {0};
+    state.chains[2] = state.chains[5] = 1;
+    solver_reset();
+    if (solve(&state) != 3) {
+        fprintf(stderr, "[parity] internal two-chain opening must win remaining boxes 5-2\n");
+        fail = 1;
+    }
+}
+
 static void check_large_cold_memo(void) {
     ColdTopo topo; RefTopo ref;
     build_topo(8, &topo, &ref);
@@ -299,6 +311,7 @@ int main(void) {
     check_cold();
     check_full_memo();
     check_large_cold_memo();
+    check_two_chain_opening();
     if (fail) {
         fprintf(stderr, "[parity] FAILED — C kernels diverged from reference\n");
         return 1;

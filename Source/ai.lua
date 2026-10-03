@@ -302,8 +302,10 @@ local captureMemo = {}
 --                   -> -len - nextVal
 --   double-cross: opp leaves a 2-domino (chain) / 4-loop (loop), handing
 --                 control back to the opener
---                   -> -(len-4) + nextVal   (chain, geometrically len>=2)
+--                   -> -(len-4) + nextVal   (chain, len>=3)
 --                   -> -(len-8) + nextVal   (loop,  geometrically len>=4)
+-- A two-chain is opened at its internal edge: both boxes become independent
+-- captures, so the opponent cannot hand them back to retain control.
 --
 -- IMPORTANT: this arithmetic is mirrored verbatim by the C kernel in
 -- Source/main.c (solve()), which is the fast path used via dotsai.solve.
@@ -316,7 +318,7 @@ local function componentOpenValue(len, isLoop, nextVal)
             if keep < worst then worst = keep end
         end
     else
-        if len >= 2 then
+        if len >= 3 then
             local keep = -(len - 4) + nextVal
             if keep < worst then worst = keep end
         end
@@ -536,6 +538,25 @@ function Endgame.negamaxSolver(board, snapshot)
     return edges[choice]
 end
 
+local function coldOpeningEdge(board, comp)
+    if comp.len == 2 and not comp.isLoop then
+        for _, box in ipairs(board.edgeBoxes[comp.edge]) do
+            if EdgeUtils.countFilled(board, board.boxEdges[box]) == 2 then
+                for _, edge in ipairs(board.boxEdges[box]) do
+                    local adj = board.edgeBoxes[edge]
+                    if not board.edgesFilled[edge] and #adj == 2 then
+                        local other = adj[1] == box and adj[2] or adj[1]
+                        if EdgeUtils.countFilled(board, board.boxEdges[other]) == 2 then
+                            return edge
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return comp.edge
+end
+
 function Endgame.berlekampSolver(board, snapshot)
     snapshot = snapshot or EdgeUtils.classify(board)
     local comps = Components.cold(board)
@@ -579,7 +600,7 @@ function Endgame.berlekampSolver(board, snapshot)
             choice = comp
         end
     end
-    return choice.edge
+    return coldOpeningEdge(board, choice)
 end
 
 -- ═══════════════════════════════════════════════════════════════════════════

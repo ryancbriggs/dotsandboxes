@@ -110,7 +110,7 @@ static int solve(CompState* s) {
         s->chains[len] = prev;
 
         int worst = -len - nextVal;            // opp greedy
-        if (len >= 2) {                        // chain double-cross
+        if (len >= 3) {                        // two-chains are opened internally
             int keep = -(len - 4) + nextVal;
             if (keep < worst) worst = keep;
         }
