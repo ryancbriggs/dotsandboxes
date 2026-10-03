@@ -326,7 +326,6 @@ local function handleSettingsInput()
             appState = "statsResetConfirm"
         end
     elseif playdate.buttonJustPressed(playdate.kButtonB) then
-        playdate.datastore.write(settings, "settings")
         returnToMainMenu()
     end
 end

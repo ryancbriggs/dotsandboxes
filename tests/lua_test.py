@@ -93,6 +93,14 @@ class CompletionTests(unittest.TestCase):
 
 
 class PersistenceTests(unittest.TestCase):
+    def test_back_from_settings_writes_once(self):
+        lua, main = app()
+        main.setState("settings")
+        lua.execute("pressed={B=true}")
+        main.settingsInput()
+        self.assertEqual(main.getState(), "menu")
+        self.assertEqual(list(lua.globals().writes.values()), ["settings"])
+
     def test_system_menu_saves_settings_from_reset_confirmation(self):
         lua, main = app()
         main.setState("settings")
