@@ -1302,6 +1302,12 @@ function Expert.chooseMove(board, snapshot)
             safeBestScore, safeBestEdge = safeBest.score, safeBest.edge
         end
 
+        -- Conservative policy: only consider a sacrifice when safe choices
+        -- are scarce and evaluate unfavourably. Skip work we cannot select.
+        local allowSacrifice = (safeCount <= SACRIFICE_SAFE_CAP)
+            and (not safeBestEdge or safeBestScore < 0)
+        if safeBestEdge and not allowSacrifice then return safeBestEdge end
+
         local safeLookup = {}
         for _, e in ipairs(snapshot.safes) do safeLookup[e] = true end
 
@@ -1332,14 +1338,6 @@ function Expert.chooseMove(board, snapshot)
                 sacrificeBestScore, sacrificeBestEdge = score, edge
             end
         end
-
-        -- Sacrifice gates: the evaluator currently doesn't simulate the
-        -- opponent grabbing the closer chain a sacrifice creates, so it
-        -- systematically over-rates sacrifices. Until we add a quiescence
-        -- pass, only switch from safe to sacrifice when (a) safe options
-        -- are running out and (b) the sacrifice is clearly better.
-        local allowSacrifice = (safeCount <= SACRIFICE_SAFE_CAP)
-            and (not safeBestEdge or safeBestScore < 0)
 
         if sacrificeBestEdge
         and allowSacrifice

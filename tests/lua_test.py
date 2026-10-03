@@ -8,6 +8,25 @@ from build_test import sdk_path
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_expert_does_not_evaluate_disallowed_root_sacrifices(self):
+        lua, board, ai = game()
+        b = position(board, 4, set(range(1, 25)) - {1, 13})
+        lua.globals().b = b
+        lua.execute('''
+            rootMoves={}
+            local play=b.playEdge
+            b.playEdge=function(self,edge,record)
+                local count=0
+                for _ in pairs(self.edgesFilled) do count=count+1 end
+                if count==2 then rootMoves[#rootMoves+1]=edge end
+                return play(self,edge,record)
+            end
+        ''')
+        ai.setDifficulty("expert")
+        edge = ai.chooseMove(b)
+        self.assertNotIn(edge, (4, 14))
+        self.assertFalse(set(lua.globals().rootMoves.values()) & {4, 14})
+
     def test_native_cold_search_yields_between_candidates(self):
         lua, board, ai = game(native=True)
         b = position(board, 4, [4, 6, 7, 12, 13, 16, 20, 22, 23])
