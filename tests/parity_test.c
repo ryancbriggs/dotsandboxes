@@ -244,9 +244,61 @@ static void check_cold(void) {
     }
 }
 
+// A full cache must still accept a newly solved state. Otherwise every miss
+// scans the table and repeatedly recomputes the states that could not fit.
+static void check_full_memo(void) {
+    solver_reset();
+    for (int i = 0; i < DOTSAI_MEMO_SIZE; i++) {
+        s_memo[i].occupied = 1;
+        s_memo[i].key.chains[1] = 1;
+    }
+    CompState state = {0};
+    state.chains[2] = 1;
+    memo_store(&state, -2);
+    int value = 0;
+    if (!memo_lookup(&state, &value) || value != -2) {
+        fprintf(stderr, "[parity] full memo did not retain a new result\n");
+        fail = 1;
+    }
+    solver_reset();
+}
+
+static void check_large_cold_memo(void) {
+    ColdTopo topo; RefTopo ref;
+    build_topo(8, &topo, &ref);
+    const int edges[] = {8,12,13,14,15,16,17,18,24,26,27,28,29,30,31,32,
+        40,41,43,49,58,59,60,61,63,67,69,71,74,77,79,82,85,87,89,91,93,
+        95,96,98,99,100,101,103,106,107,108,109,110,111};
+    uint8_t filled[DOTSAI_MAX_EDGES + 1] = {0};
+    for (unsigned i = 0; i < sizeof(edges) / sizeof(edges[0]); i++) filled[edges[i]] = 1;
+    ColdComp comps[DOTSAI_MAX_BOXES];
+    int n = cold_decompose(&topo, filled, NULL, comps);
+    CompState state = {0};
+    for (int b = 1; b <= topo.numBoxes; b++) {
+        if (cold_fillcount(&topo, b) != 2) { fail = 1; return; }
+    }
+    for (int i = 0; i < n; i++) {
+        uint8_t* counts = comps[i].isLoop ? state.loops : state.chains;
+        counts[comps[i].len]++;
+    }
+    solver_reset();
+    for (int i = 0; i < n; i++) {
+        uint8_t* counts = comps[i].isLoop ? state.loops : state.chains;
+        counts[comps[i].len]--;
+        int value = solve(&state), cached = 0;
+        if (!memo_lookup(&state, &cached) || cached != value) {
+            fprintf(stderr, "[parity] large cold board lost its latest solved result\n");
+            fail = 1; return;
+        }
+        counts[comps[i].len]++;
+    }
+}
+
 int main(void) {
     check_solve();
     check_cold();
+    check_full_memo();
+    check_large_cold_memo();
     if (fail) {
         fprintf(stderr, "[parity] FAILED — C kernels diverged from reference\n");
         return 1;

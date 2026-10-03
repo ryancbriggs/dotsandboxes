@@ -544,6 +544,7 @@ function Endgame.berlekampSolver(board, snapshot)
     local bestScore, bestComps = -math.huge, {}
 
     for i, comp in ipairs(comps) do
+        yieldIfBudgetExceeded()
         -- Future value of the state with this one component opened/removed,
         -- via the C kernel when available (fast path), else Lua fallback.
         local rest = {}

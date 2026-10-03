@@ -27,7 +27,8 @@
 // ─── Endgame solver ────────────────────────────────────────────────────────
 
 #define DOTSAI_MAX_LEN   50
-#define DOTSAI_MEMO_SIZE 4096   // power of two; ~442 KB, reset per AI move
+#define DOTSAI_MEMO_SIZE 8192   // power of two; ~848 KiB, reset per AI move
+#define DOTSAI_MEMO_PROBES 64   // bound work even when the cache is saturated
 
 typedef struct {
     uint8_t chains[DOTSAI_MAX_LEN + 1];  // count of chains of each length
@@ -54,7 +55,7 @@ static uint32_t hash_state(const CompState* s) {
 static int memo_lookup(const CompState* s, int* out) {
     const uint32_t mask = DOTSAI_MEMO_SIZE - 1;
     const uint32_t base = hash_state(s) & mask;
-    for (uint32_t probe = 0; probe < DOTSAI_MEMO_SIZE; probe++) {
+    for (uint32_t probe = 0; probe < DOTSAI_MEMO_PROBES; probe++) {
         uint32_t idx = (base + probe) & mask;
         if (!s_memo[idx].occupied) return 0;
         if (memcmp(&s_memo[idx].key, s, sizeof(CompState)) == 0) {
@@ -68,7 +69,7 @@ static int memo_lookup(const CompState* s, int* out) {
 static void memo_store(const CompState* s, int v) {
     const uint32_t mask = DOTSAI_MEMO_SIZE - 1;
     const uint32_t base = hash_state(s) & mask;
-    for (uint32_t probe = 0; probe < DOTSAI_MEMO_SIZE; probe++) {
+    for (uint32_t probe = 0; probe < DOTSAI_MEMO_PROBES; probe++) {
         uint32_t idx = (base + probe) & mask;
         if (!s_memo[idx].occupied) {
             s_memo[idx].key = *s;
@@ -81,6 +82,11 @@ static void memo_store(const CompState* s, int v) {
             return;
         }
     }
+    // Evict rather than dropping every new result once a cluster fills. A
+    // missed/evicted entry is recomputed; only exact full keys return a value.
+    s_memo[base].key = *s;
+    s_memo[base].value = (int16_t)v;
+    s_memo[base].occupied = 1;
 }
 
 // Mirrors solveComponents() + componentOpenValue() in ai.lua.
