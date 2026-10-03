@@ -77,3 +77,5 @@ before moves 88 and 96 by 29–20 and 26–23 against exhaustive best play.
 Validation against `6c28c74`, seeds 7000–7059 on all five sizes: 376 wins,
 30 draws, 194 losses (65.2%); 8×8 alone: 103 wins, 17 losses (85.8%).
 These corrected decisions still need a fresh hardware timing check.
+AI debug logs include the pre-move score, player, chain length, and free edges
+so future suspect positions can be reconstructed directly from a console log.

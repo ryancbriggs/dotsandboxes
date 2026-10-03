@@ -1489,10 +1489,10 @@ function Ai.tick()
             if Ai.debugLogging then
                 local thinkMs = nowMs() - runtime.startMs
                 local b = runtime.board
-                local free = #b:listFreeEdges()
+                local free = b:listFreeEdges()
                 local kernel = (dotsai and dotsai.solve) and "C" or "L"
                 print(string.format(
-                    "[AI %s] %s %dx%d  edge=%s  think=%dms  apply=%d/%.1fms  classify=%d/%.1fms  cold=%d/%.1fms  hot=%d/%.1fms  solve=%d/%dms(first=%dms)  free=%d  heap=%.1fKB",
+                    "[AI %s] %s %dx%d  edge=%s  think=%dms  apply=%d/%.1fms  classify=%d/%.1fms  cold=%d/%.1fms  hot=%d/%.1fms  solve=%d/%dms(first=%dms)  free=%d  heap=%.1fKB  turn=%d score=%d:%d chain=%d open=%s",
                     kernel,
                     Ai.difficulty, b.DOTS, b.DOTS,
                     tostring(runtime.result),
@@ -1502,8 +1502,10 @@ function Ai.tick()
                     profColdCalls,     profColdS     * 1000,
                     profHotCalls,      profHotS      * 1000,
                     profSolveCalls,    profSolveTotalMs, profSolveFirstMs,
-                    free,
-                    collectgarbage("count")
+                    #free,
+                    collectgarbage("count"),
+                    b.currentPlayer, b.score[1], b.score[2], b.chainLen,
+                    table.concat(free, ",")
                 ))
             end
         end
