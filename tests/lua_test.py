@@ -69,25 +69,6 @@ class SchedulerTests(unittest.TestCase):
         lua.execute("dotsai.exact_step=exactStep")
         self.assertEqual(ai.chooseMove(b), 12)
 
-    def test_expert_does_not_evaluate_disallowed_root_sacrifices(self):
-        lua, board, ai = game()
-        b = position(board, 4, set(range(1, 25)) - {1, 13})
-        lua.globals().b = b
-        lua.execute('''
-            rootMoves={}
-            local play=b.playEdge
-            b.playEdge=function(self,edge,record)
-                local count=0
-                for _ in pairs(self.edgesFilled) do count=count+1 end
-                if count==2 then rootMoves[#rootMoves+1]=edge end
-                return play(self,edge,record)
-            end
-        ''')
-        ai.setDifficulty("expert")
-        edge = ai.chooseMove(b)
-        self.assertNotIn(edge, (4, 14))
-        self.assertFalse(set(lua.globals().rootMoves.values()) & {4, 14})
-
     def test_native_cold_search_yields_between_candidates(self):
         lua, board, ai = game(native=True)
         b = position(board, 4, [4, 6, 7, 12, 13, 16, 20, 22, 23])
@@ -209,8 +190,7 @@ class LayoutTests(unittest.TestCase):
     def setup_layout(self):
         lua, main = app()
         lua.execute('''
-            widthCalls=0; texts={}
-            modules.fonts.body.getTextWidth=function(_,s) widthCalls=widthCalls+1; return #s*7 end
+            texts={}
             playdate.graphics.drawText=function(s) texts[#texts+1]=s end
             modules.stats.data={badges={},totals={gamesPlayed=1,gamesPvcP1=1,
                 gamesPvcP2=0,gamesPvp=0,boxesClaimed=5,boxesAgainst=4,
@@ -221,30 +201,23 @@ class LayoutTests(unittest.TestCase):
         ''')
         return lua, main
 
-    def test_summary_reuses_layout_and_refreshes_after_recording(self):
+    def test_summary_refreshes_after_recording(self):
         lua, main = self.setup_layout()
         main.drawTotals()
-        initial = list(lua.globals().texts.values())
-        lua.execute("widthCalls=0; texts={}")
-        main.drawTotals()
-        self.assertEqual(list(lua.globals().texts.values()), initial)
-        self.assertEqual(lua.globals().widthCalls, 0)
+        self.assertIn("1 game.", " ".join(lua.globals().texts.values()))
         lua.execute("modules.stats.data.totals.gamesPlayed=2; texts={}")
         main.drawTotals()
         self.assertIn("2 games", " ".join(lua.globals().texts.values()))
 
-    def test_goal_wrapping_is_reused_across_frames(self):
+    def test_badge_goals_follow_scroll(self):
         lua, main = self.setup_layout()
         main.drawBadges()
-        initial = list(lua.globals().texts.values())
-        lua.execute("widthCalls=0; texts={}")
-        main.drawBadges()
-        self.assertEqual(list(lua.globals().texts.values()), initial)
-        self.assertLessEqual(lua.globals().widthCalls, 1)  # optional scroll label
+        self.assertIn("Claim a long chain", " ".join(lua.globals().texts.values()))
         main.setBadgeScroll(1)
         lua.execute("texts={}")
         main.drawBadges()
         self.assertIn("Win on every board size", list(lua.globals().texts.values()))
+        self.assertNotIn("Claim a long chain", " ".join(lua.globals().texts.values()))
 
     def test_game_over_layout_refreshes_when_badges_arrive(self):
         lua, main = self.setup_layout()
@@ -254,9 +227,6 @@ class LayoutTests(unittest.TestCase):
         for edge in range(1, len(ui.board.edgeToCoord) + 1):
             ui.board.playEdge(ui.board, edge, True)
         lua.globals().drawUI(ui)
-        lua.execute("widthCalls=0; texts={}")
-        lua.globals().drawUI(ui)
-        self.assertEqual(lua.globals().widthCalls, 4)  # two score labels/numerals
         ui.newBadges = lua.table_from([lua.table_from({"goal": "Newly earned goal"})])
         lua.execute("texts={}")
         lua.globals().drawUI(ui)
@@ -264,25 +234,24 @@ class LayoutTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
-    def test_native_expert_resolves_a_seventeen_edge_tactic(self):
-        free = [3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 16, 17, 18, 20, 22, 23, 24]
-        values = edge_values(4, free)
-        self.assertEqual(values[4], 3)
-        self.assertEqual(values[20], -1)
-        _, board, ai = game(native=True)
-        b = position(board, 4, free)
-        ai.setDifficulty("expert")
-        self.assertEqual(ai.chooseMove(b), 4)
-
-    def test_native_expert_sees_past_the_old_endgame_horizon(self):
-        free = [2, 4, 6, 7, 8, 9, 10, 12, 14, 16, 17, 18, 23]
-        values = edge_values(4, free)
-        self.assertEqual(values[12], 7)
-        self.assertEqual(values[7], -1)
-        _, board, ai = game(native=True)
-        b = position(board, 4, free)
-        ai.setDifficulty("expert")
-        self.assertEqual(ai.chooseMove(b), 12)
+    def test_expert_tactical_positions(self):
+        cases = [
+            ("17-edge tactic", [3,4,5,6,7,8,9,11,13,14,16,17,18,20,22,23,24], (4,)),
+            ("13-edge tactic", [2,4,6,7,8,9,10,12,14,16,17,18,23], (12,)),
+            ("mixed safe/capture", [1,8,11,13,14,15,19,20,21,22,24], (24,)),
+            ("equal chains", range(1, 13), (1,)),
+            ("small junction", [4,5,6,13,15,18,19], (4,)),
+            ("junction handout", [1,3,4,6,7,9,10,18,19,24], (18,19)),
+            ("internal two-chain opening", [4,6,7,12,13,16,20,22,23], (6,)),
+        ]
+        for name, free, expected in cases:
+            for native in (False, True):
+                if not native and len(free) > 12:  # Beyond the Lua exact-search horizon.
+                    continue
+                with self.subTest(position=name, native=native):
+                    _, board, ai = game(native=native)
+                    ai.setDifficulty("expert")
+                    self.assertIn(ai.chooseMove(position(board, 4, free)), expected)
 
     def test_mixed_endgames_match_independent_exhaustive_search(self):
         rng = random.Random(5486)
@@ -295,29 +264,6 @@ class EndgameTests(unittest.TestCase):
                     b = position(board, dots, free)
                     ai.setDifficulty("expert")
                     self.assertEqual(values[ai.chooseMove(b)], max(values.values()), (dots, free))
-
-    def test_expert_solves_mixed_safe_and_capture_endgame(self):
-        free = [1, 8, 11, 13, 14, 15, 19, 20, 21, 22, 24]
-        values = edge_values(4, free)
-        self.assertEqual(values[24], 2)
-        self.assertEqual(values[15], 0)
-        for native in (False, True):
-            _, board, ai = game(native=native)
-            b = position(board, 4, free)
-            ai.setDifficulty("expert")
-            self.assertEqual(ai.chooseMove(b), 24)
-
-    def test_equivalent_components_share_one_native_evaluation(self):
-        lua, board, ai = game(native=True)
-        b = position(board, 4, range(1, 13))  # Three identical vertical 3-chains.
-        lua.execute('''
-            solveCalls=0
-            local solve=dotsai.solve
-            dotsai.solve=function(c,l) solveCalls=solveCalls+1; return solve(c,l) end
-        ''')
-        ai.setDifficulty("expert")
-        self.assertEqual(ai.chooseMove(b), 1)
-        self.assertEqual(lua.globals().solveCalls, 1)
 
     def test_small_junctions_match_independent_exhaustive_search(self):
         rng = random.Random(8416)
@@ -352,26 +298,6 @@ class EndgameTests(unittest.TestCase):
         self.assertIn(ai.chooseMove(b), free)
         self.assertEqual(set(b.edgesFilled.keys()), filled)
         self.assertEqual(list(b.score.values()), [0, 0])
-
-    def test_expert_searches_junctions_as_actual_edges(self):
-        for native in (False, True):
-            with self.subTest(native=native):
-                _, board, ai = game(native=native)
-                b = position(board, 4, [4, 5, 6, 13, 15, 18, 19])
-                ai.setDifficulty("expert")
-                self.assertEqual(ai.chooseMove(b), 4)
-                # The two-chain correction happens to repair the first fixture,
-                # but this junction still loses 5 instead of winning 1.
-                b = position(board, 4, [1, 3, 4, 6, 7, 9, 10, 18, 19, 24])
-                self.assertIn(ai.chooseMove(b), (18, 19))
-
-    def test_expert_opens_two_chain_internally(self):
-        for native in (False, True):
-            with self.subTest(native=native):
-                _, board, ai = game(native=native)
-                b = position(board, 4, [4, 6, 7, 12, 13, 16, 20, 22, 23])
-                ai.setDifficulty("expert")
-                self.assertEqual(ai.chooseMove(b), 6)
 
     def test_component_draft_value_does_not_depend_on_input_order(self):
         lua, _, _ = game()

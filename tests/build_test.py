@@ -29,7 +29,7 @@ class BuildTests(unittest.TestCase):
             shutil.copy2(ROOT / "Makefile", dest)
             for directory in ("Source", "tests"):
                 shutil.copytree(ROOT / directory, dest / directory,
-                                ignore=shutil.ignore_patterns("__pycache__"))
+                                ignore=shutil.ignore_patterns("__pycache__", "pdex.*", ".DS_Store"))
             env = dict(os.environ, PLAYDATE_SDK_PATH=str(sdk))
             build = subprocess.run(["make", "simulator"], cwd=dest, env=env,
                                    capture_output=True, text=True)

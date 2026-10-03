@@ -7,15 +7,9 @@
 //   cold_decompose()  ←→ Components.collectCold()
 //   edge_search_*()  ←→ endgameEdgeSearch() (incremental exhaustive minimax)
 //
-// "Pure" means: no pd_api.h, no globals beyond the solve memo, deterministic.
-// This header is #included by Source/main.c (the Playdate extension) and by
-// tests/parity_test.c (the build-time differential check). Keeping the logic
-// here — and the Lua reference short and readable — is what makes the C
-// auditable: the test fuzzes this against an independent reference and the
-// build fails on any divergence.
-//
-// IMPORTANT: any change to the arithmetic/traversal here MUST be mirrored in
-// the Lua reference (ai.lua) and vice-versa. The parity test enforces it.
+// Shared by the Playdate extension and host tests. parity_test.c checks the
+// solvers against independent recursive oracles; native_test.py also checks
+// actual Lua/C cold-decomposition parity. Keep both implementations aligned.
 //
 
 #ifndef DOTSAI_SOLVER_H

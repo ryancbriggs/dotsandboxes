@@ -183,8 +183,7 @@ end
 -- Components.collectCold above is the readable, audited reference (and the
 -- no-C fallback). When the C extension is loaded we push the static board
 -- topology once per board size, then each call only marshals the edge-fill
--- bitset. The C `cold_decompose` mirrors collectCold exactly (enforced by the
--- build-time parity test in tests/parity_test.c).
+-- bitset. tests/native_test.py compares both implementations directly.
 
 local coldTopoDots = nil   -- board size whose topology is currently resident
 

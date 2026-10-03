@@ -1,9 +1,9 @@
-"""Check the incremental native solver against an independent board oracle."""
+"""Check native kernels against the Lua fallback and an independent board oracle."""
 import random
 import unittest
 
 from endgame_reference import boxes_for, edge_values
-from lua_helpers import native_solver
+from lua_helpers import ROOT, game, native_solver, position
 
 
 def set_topology(kernel, dots):
@@ -17,7 +17,28 @@ def set_topology(kernel, dots):
     kernel.test_cold_init(len(boxes), edges, be, bytes(eb))
 
 
-class ExactTests(unittest.TestCase):
+class NativeTests(unittest.TestCase):
+    def test_cold_components_match_actual_lua_fallback(self):
+        source = (ROOT / "Source/ai.lua").read_text()
+        lua, board, components = game(native=True, source=source.rsplit("return Ai", 1)[0]
+                                     + "return Components")
+        def packed(comps):
+            return [(c.len, c.isLoop, c.edge, list(c.entryEdges.values()) if c.entryEdges else [])
+                    for c in comps.values()]
+        rng = random.Random(77149)
+        for dots in range(4, 9):
+            for _ in range(200):
+                count = 2 * dots * (dots - 1)
+                free = rng.sample(range(1, count + 1), rng.randrange(count + 1))
+                b = position(board, dots, free)
+                excluded = lua.table_from({i: True for i in range(1, (dots - 1) ** 2 + 1)
+                                           if rng.random() < .15}) if rng.randrange(3) == 0 else None
+                self.assertEqual(packed(components.cold(b, excluded)),
+                                 packed(components.collectCold(b, excluded)), (dots, free))
+        loop = position(board, 4, [4, 5, 14, 18])
+        self.assertEqual(packed(components.cold(loop)), packed(components.collectCold(loop)))
+        self.assertEqual([(c.len, c.isLoop) for c in components.cold(loop).values()], [(4, True)])
+
     def test_values_and_moves_match_board_oracle(self):
         kernel = native_solver()
         rng = random.Random(66418)

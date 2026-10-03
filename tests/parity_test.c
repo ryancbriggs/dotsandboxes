@@ -1,25 +1,5 @@
-//
-// parity_test.c — build-time differential check for Source/solver.h.
-//
-// There is no host Lua interpreter available, so we cannot run the Lua
-// reference (Source/ai.lua) at build time directly. Instead this harness
-// pins the production C kernels against an INDEPENDENT reference
-// implementation written here from scratch — a different person/style
-// transliteration of the same audited Lua algorithms. Random fuzzing over
-// many positions then asserts the two agree exactly.
-//
-// Why this is a real check, not circular:
-//   * Source/solver.h is the optimized production code (memo hash table,
-//     packed structs, recursion) — what ships.
-//   * The references below are deliberately naive (plain recursion, no memo,
-//     STL-free but obvious) and written independently from the Lua.
-//   * A defect would have to be reproduced identically in BOTH the production
-//     C and this naive C (and the Lua) to escape — vanishingly unlikely for
-//     the threshold/traversal bugs we actually hit historically.
-//
-// Built and run by the Makefile before every `make`; a mismatch aborts the
-// build with a diff. Zero runtime cost to the game.
-//
+// Build-time checks of the shipped C kernels against simple recursive oracles.
+// Actual Lua/C cold-decomposition parity is covered by native_test.py.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,84 +47,21 @@ static int ref_solve(RefState* s) {
     return best == -32768 ? 0 : best;
 }
 
-// ─── Reference 2: cold decomposition (independent of cold_decompose()) ──────
-//
-// Same traversal contract as Components.collectCold in ai.lua: boxes ascending,
-// each box's 4 edge slots in order, depth-first into the first qualifying
-// 2-filled neighbour. Written here without consulting solver.h's version.
-
-typedef struct {
-    int numBoxes, numEdges;
-    int be[DOTSAI_MAX_BOXES + 1][4];
-    int eb[DOTSAI_MAX_EDGES + 1][2];
-    const uint8_t* filled;
-    int seen[DOTSAI_MAX_BOXES + 1];
-} RefTopo;
-
-typedef struct {
-    int len, isLoop, edge, nEntries;
-    int entry[DOTSAI_MAX_EDGES];
-} RefComp;
-
-static int ref_fc(const RefTopo* t, int box) {
-    int n = 0;
-    for (int k = 0; k < 4; k++) { int e = t->be[box][k]; if (e && t->filled[e]) n++; }
-    return n;
-}
-
-static void ref_dfs(RefTopo* t, int box, RefComp* c, int* first) {
-    t->seen[box] = 1;
-    c->len++;
-    for (int k = 0; k < 4; k++) {
-        int e = t->be[box][k];
-        if (!e || t->filled[e]) continue;
-        if (*first == 0) *first = e;
-        int b1 = t->eb[e][0], b2 = t->eb[e][1];
-        int nb = 0;
-        if (b1 && b2) nb = (b1 == box) ? b2 : b1;
-        if (nb && ref_fc(t, nb) == 2) {
-            if (!t->seen[nb]) ref_dfs(t, nb, c, first);
-        } else {
-            c->entry[c->nEntries++] = e;
-        }
-    }
-}
-
-static int ref_cold(RefTopo* t, const uint8_t* filled, const uint8_t* excl,
-                     RefComp* out) {
-    t->filled = filled;
-    memset(t->seen, 0, sizeof(t->seen));
-    if (excl) for (int b = 1; b <= t->numBoxes; b++) if (excl[b]) t->seen[b] = 1;
-    int n = 0;
-    for (int box = 1; box <= t->numBoxes; box++) {
-        if (t->seen[box] || ref_fc(t, box) != 2) continue;
-        RefComp* c = &out[n];
-        c->len = 0; c->isLoop = 0; c->edge = 0; c->nEntries = 0;
-        int first = 0;
-        ref_dfs(t, box, c, &first);
-        c->isLoop = (c->nEntries == 0);
-        c->edge = c->isLoop ? first : c->entry[0];
-        n++;
-    }
-    return n;
-}
-
 // ─── Board topology generation (matches board.lua's id scheme) ──────────────
 //
 // Edges: horizontals first (r=1..dots, c=1..dots-1), then verticals
 // (r=1..dots-1, c=1..dots). Boxes row-major; box edges = {top,right,bottom,
 // left}. Mirrors Board.new in board.lua so fuzzed positions are realistic.
 
-static void build_topo(int dots, ColdTopo* ct, RefTopo* rt) {
+static void build_topo(int dots, ColdTopo* ct) {
     int H_per_row = dots - 1;
     int nH = dots * (dots - 1);
     int numEdges = dots * (dots - 1) * 2;
     int numBoxes = (dots - 1) * (dots - 1);
 
     memset(ct, 0, sizeof(*ct));
-    memset(rt, 0, sizeof(*rt));
-    ct->numBoxes = rt->numBoxes = numBoxes;
-    ct->numEdges = rt->numEdges = numEdges;
+    ct->numBoxes = numBoxes;
+    ct->numEdges = numEdges;
 
     // edge id helpers
     #define HID(r,c) ((r - 1) * H_per_row + (c))                 // 1-based
@@ -160,14 +77,11 @@ static void build_topo(int dots, ColdTopo* ct, RefTopo* rt) {
             int e4[4] = { top, right, bottom, left };
             for (int k = 0; k < 4; k++) {
                 ct->boxEdges[box][k] = (uint8_t)e4[k];
-                rt->be[box][k] = e4[k];
                 // edgeBoxes: append this box to edge's adjacency (max 2)
                 if (ct->edgeBoxes[e4[k]][0] == 0) {
                     ct->edgeBoxes[e4[k]][0] = (uint8_t)box;
-                    rt->eb[e4[k]][0] = box;
                 } else {
                     ct->edgeBoxes[e4[k]][1] = (uint8_t)box;
-                    rt->eb[e4[k]][1] = box;
                 }
             }
             box++;
@@ -207,45 +121,6 @@ static void check_solve(void) {
     }
 }
 
-static int comps_equal(const ColdComp* a, int na, const RefComp* b, int nb) {
-    if (na != nb) return 0;
-    for (int i = 0; i < na; i++) {
-        if (a[i].len != b[i].len) return 0;
-        if (a[i].isLoop != b[i].isLoop) return 0;
-        if (a[i].edge != b[i].edge) return 0;
-        if (a[i].nEntries != b[i].nEntries) return 0;
-        for (int k = 0; k < a[i].nEntries; k++)
-            if (a[i].entry[k] != b[i].entry[k]) return 0;
-    }
-    return 1;
-}
-
-static void check_cold(void) {
-    ColdTopo ct; RefTopo rt;
-    for (int iter = 0; iter < 60000; iter++) {
-        int dots = 4 + rnd(5);              // 4..8
-        build_topo(dots, &ct, &rt);
-
-        uint8_t filled[DOTSAI_MAX_EDGES + 1];
-        uint8_t excl[DOTSAI_MAX_BOXES + 1];
-        filled[0] = 0; excl[0] = 0;
-        for (int e = 1; e <= ct.numEdges; e++) filled[e] = (uint8_t)(rnd(100) < 55);
-        int useExcl = rnd(3) == 0;
-        for (int b = 1; b <= ct.numBoxes; b++) excl[b] = (uint8_t)(useExcl && rnd(100) < 15);
-
-        ColdComp cc[DOTSAI_MAX_BOXES];
-        RefComp  rc[DOTSAI_MAX_BOXES];
-        int nc = cold_decompose(&ct, filled, useExcl ? excl : NULL, cc);
-        int nr = ref_cold(&rt, filled, useExcl ? excl : NULL, rc);
-
-        if (!comps_equal(cc, nc, rc, nr)) {
-            fprintf(stderr,
-                "[parity] cold mismatch dots=%d (nc=%d nr=%d)\n", dots, nc, nr);
-            fail = 1; return;
-        }
-    }
-}
-
 // A full cache must still accept a newly solved state. Otherwise every miss
 // scans the table and repeatedly recomputes the states that could not fit.
 static void check_full_memo(void) {
@@ -276,8 +151,8 @@ static void check_two_chain_opening(void) {
 }
 
 static void check_large_cold_memo(void) {
-    ColdTopo topo; RefTopo ref;
-    build_topo(8, &topo, &ref);
+    ColdTopo topo;
+    build_topo(8, &topo);
     const int edges[] = {8,12,13,14,15,16,17,18,24,26,27,28,29,30,31,32,
         40,41,43,49,58,59,60,61,63,67,69,71,74,77,79,82,85,87,89,91,93,
         95,96,98,99,100,101,103,106,107,108,109,110,111};
@@ -308,7 +183,7 @@ static void check_large_cold_memo(void) {
 
 // Independent oracle: play each edge on a filled-array board and recurse.
 // No bit masks, memo table, or component assumptions are shared with the kernel.
-static int ref_edges(const RefTopo* t, uint8_t* filled, const uint8_t* edges, int n) {
+static int ref_edges(const ColdTopo* t, uint8_t* filled, const uint8_t* edges, int n) {
     int best = -127;
     for (int i = 0; i < n; i++) {
         int e = edges[i];
@@ -316,9 +191,9 @@ static int ref_edges(const RefTopo* t, uint8_t* filled, const uint8_t* edges, in
         filled[e] = 1;
         int gain = 0;
         for (int j = 0; j < 2; j++) {
-            int b = t->eb[e][j];
-            if (b && filled[t->be[b][0]] && filled[t->be[b][1]]
-                  && filled[t->be[b][2]] && filled[t->be[b][3]]) gain++;
+            int b = t->edgeBoxes[e][j];
+            if (b && filled[t->boxEdges[b][0]] && filled[t->boxEdges[b][1]]
+                  && filled[t->boxEdges[b][2]] && filled[t->boxEdges[b][3]]) gain++;
         }
         int rest = ref_edges(t, filled, edges, n);
         int value = gain ? gain + rest : -rest;
@@ -329,10 +204,10 @@ static int ref_edges(const RefTopo* t, uint8_t* filled, const uint8_t* edges, in
 }
 
 static void check_exact_edges(void) {
-    ColdTopo topo; RefTopo ref;
+    ColdTopo topo;
     static EdgeSearch search;
     for (int iter = 0; iter < 300; iter++) {
-        build_topo(4 + rnd(5), &topo, &ref);
+        build_topo(4 + rnd(5), &topo);
         uint8_t filled[DOTSAI_MAX_EDGES + 1], edges[7];
         memset(filled, 1, sizeof(filled));
         int n = 1 + rnd(7);
@@ -342,7 +217,7 @@ static void check_exact_edges(void) {
             filled[e] = 0;
             edges[i] = (uint8_t)e;
         }
-        int expected = ref_edges(&ref, filled, edges, n);
+        int expected = ref_edges(&topo, filled, edges, n);
         if (!edge_search_begin(&search, &topo, edges, n)) { fail = 1; return; }
         while (!edge_search_step(&search, 13)) {}
         if (search.values[search.full] != expected) {
@@ -355,7 +230,6 @@ static void check_exact_edges(void) {
 
 int main(void) {
     check_solve();
-    check_cold();
     check_full_memo();
     check_large_cold_memo();
     check_two_chain_opening();
@@ -364,6 +238,6 @@ int main(void) {
         fprintf(stderr, "[parity] FAILED — C kernels diverged from reference\n");
         return 1;
     }
-    printf("PARITY_OK solve+cold+edges (90300 fuzz cases)\n");
+    printf("PARITY_OK solve+edges (30300 fuzz cases)\n");
     return 0;
 }
