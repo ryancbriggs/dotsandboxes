@@ -57,6 +57,10 @@ ULIBS =
 
 include $(SDK)/C_API/buildsupport/common.mk
 
+# common.mk tracks device headers through .d files, but its simulator link
+# target depends only on SRC. Rebuild it when the included kernels change too.
+$(OBJDIR)/pdex.$(DYLIB_EXT): Source/solver.h
+
 # Don't bundle main.c (or any other "unknown" file types) into the .pdx.
 PDCFLAGS += -k
 
