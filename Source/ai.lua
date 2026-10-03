@@ -38,6 +38,8 @@ local SLICE_BUDGET_MS <const> = 15          -- per-frame compute slice
 -- are already paced by main.lua's decaying chainPace, so stacking a floor on
 -- each box of a long chain just feels clunky ("it's obvious, do it!").
 local AI_MIN_DELAY_MS <const> = 150
+-- Leave roughly two frames of the half-second Expert allowance for fallback.
+local EXPERT_EXACT_BUDGET_MS <const> = 400
 
 local runtime = {
     coro          = nil,
@@ -557,11 +559,11 @@ local function coldOpeningEdge(board, comp)
     return comp.edge
 end
 
--- Junctions are not independent chains. Search their actual remaining edges
--- when small enough (at most 2^14 states), without mutating the live board.
+-- Search actual remaining edges when small enough (at most 2^14 states),
+-- including extra turns after captures, without mutating the live board.
 -- Larger junction positions use a bounded, explicitly approximate policy:
 -- open the edge that gives away the fewest immediately collectable boxes.
-local function junctionOpening(board, free)
+local function endgameEdgeSearch(board, free, deadline)
     if #free > 14 then
         local bestEdge, bestLoss = free[1], math.huge
         for _, first in ipairs(free) do
@@ -609,6 +611,7 @@ local function junctionOpening(board, free)
     local memo = { [0] = 0 }
     local function solve(remaining)
         yieldIfBudgetExceeded()
+        if deadline and nowMs() >= deadline then return nil end
         if memo[remaining] ~= nil then return memo[remaining] end
         local best = -math.huge
         for _, edge in ipairs(free) do
@@ -619,6 +622,7 @@ local function junctionOpening(board, free)
                     if remaining & masks[b] == bit then gained = gained + 1 end
                 end
                 local rest = solve(remaining ~ bit)
+                if rest == nil then return nil end
                 local value = gained > 0 and (gained + rest) or -rest
                 if value > best then best = value end
             end
@@ -629,8 +633,13 @@ local function junctionOpening(board, free)
     local remaining = (1 << #free) - 1
     local bestEdge, best = free[1], -math.huge
     for _, edge in ipairs(free) do
-        -- The caller has no closers, so every opening passes the turn.
-        local value = -solve(remaining ~ bits[edge])
+        local bit, gained = bits[edge], 0
+        for _, b in ipairs(board.edgeBoxes[edge]) do
+            if remaining & masks[b] == bit then gained = gained + 1 end
+        end
+        local rest = solve(remaining ~ bit)
+        if rest == nil then return nil end
+        local value = gained > 0 and (gained + rest) or -rest
         if value > best then bestEdge, best = edge, value end
     end
     return bestEdge
@@ -643,7 +652,7 @@ function Endgame.berlekampSolver(board, snapshot)
     for _, comp in ipairs(comps) do represented = represented + comp.len end
     local remaining = #board.boxEdges - board.score[1] - board.score[2]
     if represented ~= remaining then
-        return junctionOpening(board, snapshot.free)
+        return endgameEdgeSearch(board, snapshot.free)
     end
     if #comps == 0 then
         return snapshot.free[math.random(#snapshot.free)]
@@ -1186,6 +1195,13 @@ end
 function Expert.chooseMove(board, snapshot)
     snapshot = snapshot or EdgeUtils.classify(board)
     local rootPlayer = board.currentPlayer
+
+    -- Mixed positions need real move order, not independent-chain estimates.
+    -- Keep the faster component solver for already-cold endgames.
+    if #snapshot.free <= 12 and (#snapshot.closers > 0 or #snapshot.safes > 0) then
+        local edge = endgameEdgeSearch(board, snapshot.free, nowMs() + EXPERT_EXACT_BUDGET_MS)
+        if edge then return edge end
+    end
 
     if #snapshot.closers > 0 then
         local midChain = (board.chainLen or 0) > 0

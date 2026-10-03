@@ -8,6 +8,31 @@ from build_test import sdk_path
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_expert_abandons_slow_exact_search_with_a_clean_board(self):
+        lua, board, ai = game(native=True)
+        free = [1, 8, 11, 13, 14, 15, 19, 20, 21, 22, 24]
+        b = position(board, 4, free)
+        filled, score = set(b.edgesFilled.keys()), list(b.score.values())
+        player = b.currentPlayer
+        ai.setDifficulty("expert")
+        lua.execute("playdate.getCurrentTimeMilliseconds = function() now=now+1; return now end")
+        ai.beginChooseMove(b, True)
+        done = False
+        for _ in range(10):
+            done, edge = ai.tick()
+            self.assertEqual(set(b.edgesFilled.keys()), filled)
+            self.assertEqual(list(b.score.values()), score)
+            self.assertEqual(b.currentPlayer, player)
+            if done:
+                break
+            lua.globals().now += 50
+        self.assertTrue(done, "optional exact search exceeded its wall-time budget")
+        self.assertIn(edge, free)
+        self.assertLess(lua.globals().now, 600)
+        # A timed-out search must not poison the next move's result/cache.
+        lua.execute("playdate.getCurrentTimeMilliseconds = function() return now end")
+        self.assertEqual(ai.chooseMove(b), 24)
+
     def test_expert_does_not_evaluate_disallowed_root_sacrifices(self):
         lua, board, ai = game()
         b = position(board, 4, set(range(1, 25)) - {1, 13})
@@ -203,6 +228,29 @@ class LayoutTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_mixed_endgames_match_independent_exhaustive_search(self):
+        rng = random.Random(5486)
+        for dots in range(4, 9):
+            for _ in range(6):
+                free = rng.sample(range(1, 2 * dots * (dots - 1) + 1), rng.randint(8, 12))
+                values = edge_values(dots, free)
+                for native in (False, True):
+                    _, board, ai = game(native=native)
+                    b = position(board, dots, free)
+                    ai.setDifficulty("expert")
+                    self.assertEqual(values[ai.chooseMove(b)], max(values.values()), (dots, free))
+
+    def test_expert_solves_mixed_safe_and_capture_endgame(self):
+        free = [1, 8, 11, 13, 14, 15, 19, 20, 21, 22, 24]
+        values = edge_values(4, free)
+        self.assertEqual(values[24], 2)
+        self.assertEqual(values[15], 0)
+        for native in (False, True):
+            _, board, ai = game(native=native)
+            b = position(board, 4, free)
+            ai.setDifficulty("expert")
+            self.assertEqual(ai.chooseMove(b), 24)
+
     def test_equivalent_components_share_one_native_evaluation(self):
         lua, board, ai = game(native=True)
         b = position(board, 4, range(1, 13))  # Three identical vertical 3-chains.

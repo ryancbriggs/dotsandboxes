@@ -18,3 +18,18 @@ search preserves the board, and reports wins, box margins, and host thinking
 times. References select `ai.lua`; both players use the current Board and native
 kernels. Use a fresh `--start-seed` range to validate a candidate after tuning.
 Host timings are not a substitute for Playdate hardware measurements.
+
+#### Expert experiments
+
+Each change is tested against the preceding version with both seats swapped.
+Tuning uses seeds 0–19; validation uses a separate seed range on all five sizes.
+The extra exact search gets 400 ms of wall time, leaving room for its fallback
+within the roughly half-second thinking allowance. Search yields between frames.
+
+| Change | Baseline | Validation seeds | Wins / draws / losses | Score rate |
+| --- | --- | --- | --- | --- |
+| Solve mixed endgames with up to 12 free edges | `65eb5f7` | 1000–1059 | 320 / 33 / 247 | 56.1% |
+
+The first experiment improved 40 of 300 paired openings and worsened none;
+mean score margin was +1.40 boxes. The regression suite also checks choices
+against independent exhaustive minimax and exercises timeout recovery.
