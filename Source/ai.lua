@@ -455,8 +455,11 @@ local function compValue(comp)
 end
 
 local function multisetKey(vals)
-    table.sort(vals, function(a, b) return a > b end)
-    return table.concat(vals, ",")
+    -- Canonicalize only the key: callers restore the live array by index and
+    -- keep a parallel array of physical component edges.
+    local sorted = { table.unpack(vals) }
+    table.sort(sorted, function(a, b) return a > b end)
+    return table.concat(sorted, ",")
 end
 
 local function negamax(vals, cache)

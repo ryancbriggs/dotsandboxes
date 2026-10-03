@@ -44,5 +44,15 @@ class CompletionTests(unittest.TestCase):
                 self.assertTrue(b.recorded)
 
 
+class EndgameTests(unittest.TestCase):
+    def test_component_scores_stay_attached_to_their_edges(self):
+        for difficulty in ("medium", "hard"):
+            with self.subTest(difficulty=difficulty):
+                _, board, ai = game()
+                b = position(board, 4, [1, 3, 7, 12, 13, 16, 17, 21, 24])
+                ai.setDifficulty(difficulty)
+                self.assertEqual(ai.chooseMove(b), 21)
+
+
 if __name__ == "__main__":
     unittest.main()
