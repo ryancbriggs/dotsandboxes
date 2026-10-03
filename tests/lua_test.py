@@ -73,6 +73,35 @@ class CompletionTests(unittest.TestCase):
                 self.assertTrue(b.recorded)
 
 
+class PersistenceTests(unittest.TestCase):
+    def test_version_one_saves_drop_retired_badges_but_preserve_stats(self):
+        lua, _, _ = game()
+        lua.execute('''
+            modules={achievements={sync=function() end,reset=function() end}}
+            function import(name) return modules[name] end
+            playdate.datastore={read=function() return saved end,
+                write=function(data) saved=data end}
+        ''')
+        for name in ("geometry", "badges", "stats"):
+            lua.globals().modules[name] = lua.execute((ROOT / "Source" / (name + ".lua")).read_text())
+        stats = lua.globals().modules.stats
+        stats.reset()
+        saved = lua.globals().saved
+        saved.badges.boxes_100 = True
+        saved.badges.games_10 = True
+        saved.badges.beat_easy = 123456
+        saved.totals.gamesPlayed = 12
+        saved.byDifficulty.easy.fastestWinSecs = 25
+        saved.bySize[6].wins = 4
+        stats.load()
+        self.assertIsNone(stats.data.badges.boxes_100)
+        self.assertIsNone(stats.data.badges.games_10)
+        self.assertEqual(stats.data.badges.beat_easy, 123456)
+        self.assertEqual(stats.data.totals.gamesPlayed, 12)
+        self.assertEqual(stats.data.byDifficulty.easy.fastestWinSecs, 25)
+        self.assertEqual(stats.data.bySize[6].wins, 4)
+
+
 class EndgameTests(unittest.TestCase):
     def test_small_junctions_match_independent_exhaustive_search(self):
         rng = random.Random(8416)

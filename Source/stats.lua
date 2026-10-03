@@ -55,7 +55,8 @@ end
 local function migrate(raw)
     local def = defaults()
     if type(raw) ~= "table" then return def end
-    if raw.version == CURRENT_VERSION then return raw end
+    -- Badge definitions can change without a structural schema change.
+    -- Normalize every save so retired IDs cannot inflate completion totals.
 
     for k, v in pairs(raw.totals or {}) do
         if def.totals[k] ~= nil then def.totals[k] = v end
