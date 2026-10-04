@@ -63,7 +63,10 @@ def game(native=False, source=None):
         lua.globals().dotsai.cold = cold
         lua.globals().dotsai.exact_begin = lambda edges: bool(kernel.test_exact_begin(
             edges.encode("latin1"), len(edges)))
-        lua.globals().dotsai.exact_step = lambda: kernel.test_exact_step(512) or None
+        def exact_step():
+            edge = kernel.test_exact_step(128)
+            return False if edge < 0 else edge or None
+        lua.globals().dotsai.exact_step = exact_step
     board = lua.execute((ROOT / "Source/board.lua").read_text())
     ai = lua.execute(source if source is not None else (ROOT / "Source/ai.lua").read_text())
     return lua, board, ai

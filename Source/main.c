@@ -7,7 +7,7 @@
 //   dotsai.cold_init(dots, be, eb)  send static board topology once per game
 //   dotsai.cold(filled, excluded)   cold-component decomposition for a position
 //   dotsai.exact_begin(freeEdges)   start an exact remaining-edge search
-//   dotsai.exact_step()             advance one batch; nil until complete
+//   dotsai.exact_step()             nil while busy, false if capped, else edge
 //
 // All algorithmic logic lives in solver.h (pure C, no Playdate deps) so the
 // exact same code is exercised by the build-time parity test. This file only
@@ -145,8 +145,7 @@ static int lua_exact_begin(lua_State* L) {
     (void)L;
     size_t count = 0;
     const char* edges = pd->lua->getArgBytes(1, &count);
-    s_exact.next = s_exact.full = 0;
-    s_exact.bestEdge = 0;
+    s_exact.depth = s_exact.bestEdge = s_exact.aborted = 0;
     int ok = s_topo_ready && count <= DOTSAI_EXACT_MAX_EDGES
         && edge_search_begin(&s_exact, &s_topo, (const uint8_t*)edges, (int)count);
     pd->lua->pushBool(ok);
@@ -157,8 +156,9 @@ static int lua_exact_step(lua_State* L) {
     (void)L;
     // Bound each C call; Lua checks its frame slice and wall deadline between
     // batches. No Playdate API is called from inside the portable solver.
-    int edge = edge_search_step(&s_exact, 512);
-    if (edge) pd->lua->pushInt(edge);
+    int edge = edge_search_step(&s_exact, 128);
+    if (edge < 0) pd->lua->pushBool(0);
+    else if (edge) pd->lua->pushInt(edge);
     else pd->lua->pushNil();
     return 1;
 }

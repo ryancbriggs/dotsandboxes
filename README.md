@@ -33,15 +33,19 @@ within the roughly half-second thinking allowance. Search yields between frames.
 | Solve mixed endgames with up to 12 free edges | `65eb5f7` | 1000–1059 | 320 / 33 / 247 | 56.1% |
 | Native search extending the horizon to 16 free edges | `0377832` | 2000–2059 | 361 / 30 / 209 | 62.7% |
 | Extend native search to 18 free edges | `5b01257` | 3000–3059 | 351 / 17 / 232 | 59.9% |
+| Search connected chains before the last safe moves | `5619c8e` | 8300–8359 | 453 / 21 / 126 | 77.3% |
 
 The first experiment improved 40 of 300 paired openings and worsened none;
 mean score margin was +1.40 boxes. The regression suite also checks choices
 against independent exhaustive minimax and exercises timeout recovery.
 The 16-edge native search improved 78 of 300 pairs and worsened none, with a
 +1.97 box margin. Expanding to 18 edges improved another 61 pairs and worsened
-none (+1.59 boxes). The current table uses 256 KiB and advances at most 512
-states per C call; tests also check cancellation, interrupted searches, and
-restarting on new boards. Actual device timing still needs hardware measurement.
+none (+1.59 boxes). The current alpha-beta search replaces that flat table with
+a 512 KiB cache and advances at most 128 nodes per C call. It considers up to
+63 remaining edges when safe moves are scarce, skips equivalent chain moves,
+and retains junctions and legal handouts. Searches above 18 edges also have a
+20,000-node cap. Tests cover cancellation, both limits, and restarting on new
+boards. Debug logs report `search=solved`, `timeout`, `capped`, or `skip`.
 
 Two wider opening policies were rejected: eight safe candidates scored 49.2%
 in 300 tuning games (seeds 0–29); checking two opponent replies on large boards
@@ -82,3 +86,15 @@ about a second. The fallback now stops evaluating an opening once its box loss
 cannot beat the best candidate; this additional speedup needs device timing.
 AI debug logs include the pre-move score, player, chain length, and free edges
 so future suspect positions can be reconstructed directly from a console log.
+
+#### Connected-chain setup correction
+
+The later 25–24 hardware win exposed an earlier mistake with four safe moves
+left: Expert chose edge 34, allowing a 29–20 loss, while edge 13 could force a
+33–16 win. The old evaluator treated chains meeting at junctions as independent.
+The new search finds edge 13 and tests its actual move order through the junctions.
+The 600-game validation above used separate old/new native kernels as well as
+their Lua policies; 8×8 alone was 99 wins and 21 losses (82.5%). The 4×4 result
+was unchanged. The SDK 3.1.2 device build, Simulator regression, and five complete
+Simulator games (320 moves) pass. Device timing remains to be checked; host
+timings do not model the hardware's 400 ms deadline.

@@ -3,7 +3,7 @@ import random
 import json
 from itertools import permutations
 
-from lua_helpers import ROOT, app, game, position
+from lua_helpers import ROOT, app, game, native_solver, position
 from endgame_reference import boxes_for, edge_values
 from build_test import sdk_path
 
@@ -40,11 +40,14 @@ class SchedulerTests(unittest.TestCase):
         b = position(board, 4, free)
         filled, score = set(b.edgesFilled.keys()), list(b.score.values())
         ai.setDifficulty("expert")
+        # One real search node per call keeps this a slow-worker test even
+        # when pruning makes the position finish in a normal batch.
+        lua.globals().slowExactStep = lambda: native_solver().test_exact_step(1) or None
         lua.execute('''
             exactStep=dotsai.exact_step; exactSteps=0
             dotsai.exact_step=function()
                 exactSteps=exactSteps+1; now=now+60
-                return exactStep()
+                return slowExactStep()
             end
         ''')
         ai.beginChooseMove(b, True)
@@ -235,6 +238,17 @@ class LayoutTests(unittest.TestCase):
 
 
 class EndgameTests(unittest.TestCase):
+    def test_expert_preserves_the_win_before_connected_chains_open(self):
+        # Hardware game: four safe moves remain. A full-board reference search
+        # gives edge 13 a +17 future margin; the old heuristic chose 34 (-9).
+        free = [8,10,11,13,14,15,16,17,20,21,22,25,27,28,29,30,31,32,34,35,
+                36,37,41,42,43,45,46,47,48,49,58,59,61,62,63,66,69,70,75,
+                77,78,83,85,86,91,93,94,99,101,106,107,109,111]
+        _, board, ai = game(native=True)
+        b = position(board, 8, free)
+        ai.setDifficulty("expert")
+        self.assertEqual(ai.chooseMove(b), 13)
+
     def test_expert_finishes_loop_captures_before_handing_back_control(self):
         replay = json.loads((ROOT / "tests/fixtures/hardware_8x8.json").read_text())
         for native in (False, True):

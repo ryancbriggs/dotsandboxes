@@ -220,9 +220,9 @@ static void check_exact_edges(void) {
         int expected = ref_edges(&topo, filled, edges, n);
         if (!edge_search_begin(&search, &topo, edges, n)) { fail = 1; return; }
         while (!edge_search_step(&search, 13)) {}
-        if (search.values[search.full] != expected) {
+        if (search.value != expected) {
             fprintf(stderr, "[parity] edge search mismatch: got=%d expected=%d\n",
-                    search.values[search.full], expected);
+                    search.value, expected);
             fail = 1; return;
         }
     }

@@ -27,6 +27,7 @@ local profColdCalls    = 0
 local profColdS        = 0   -- Components.collectCold
 local profHotCalls     = 0
 local profHotS         = 0   -- collectHotComponents
+local profSearchStatus = "skip"
 
 local function profClock() return playdate.getElapsedTime() end
 
@@ -578,16 +579,22 @@ local function approximateJunctionOpening(board, free)
 end
 
 -- Exact future box margin, including extra turns, on a separate edge mask.
--- Native batches search up to 18 free edges; the Lua fallback caps at 14.
+-- Native batches search connected endgames too; the Lua fallback caps at 14.
 -- No result is used unless the search finishes within its wall-time budget.
 local function endgameEdgeSearch(board, free, deadline)
-    if #free <= 18 and dotsai and dotsai.exact_begin and dotsai.exact_step
+    if #free <= 63 and dotsai and dotsai.exact_begin and dotsai.exact_step
         and ensureColdTopo(board) and dotsai.exact_begin(string.char(table.unpack(free))) then
         while true do
             yieldIfBudgetExceeded()
-            if deadline and nowMs() >= deadline then return nil end
+            if deadline and nowMs() >= deadline then
+                profSearchStatus = "timeout"
+                return nil
+            end
             local edge = dotsai.exact_step()
-            if edge then return edge end
+            if edge ~= nil then
+                profSearchStatus = edge and "solved" or "capped"
+                return edge or nil
+            end
         end
     end
     if #free > 14 then return nil end
@@ -1197,8 +1204,9 @@ function Expert.chooseMove(board, snapshot)
 
     -- Mixed positions need real move order, not independent-chain estimates.
     -- Keep the faster component solver for already-cold endgames.
-    local exactLimit = (dotsai and dotsai.exact_begin and dotsai.exact_step) and 18 or 12
-    if #snapshot.free <= exactLimit and (#snapshot.closers > 0 or #snapshot.safes > 0) then
+    local exactLimit = (dotsai and dotsai.exact_begin and dotsai.exact_step) and 63 or 12
+    if #snapshot.free <= exactLimit and (#snapshot.free <= 18 or #snapshot.safes <= 6)
+        and (#snapshot.closers > 0 or #snapshot.safes > 0) then
         local edge = endgameEdgeSearch(board, snapshot.free, nowMs() + EXPERT_EXACT_BUDGET_MS)
         if edge then return edge end
     end
@@ -1462,6 +1470,7 @@ function Ai.beginChooseMove(board, midChain)
     profClassifyCalls, profClassifyS = 0, 0
     profColdCalls, profColdS = 0, 0
     profHotCalls, profHotS = 0, 0
+    profSearchStatus = "skip"
     runtime.board   = board
     runtime.startMs = nowMs()
     runtime.minDelayMs = midChain and 0 or AI_MIN_DELAY_MS
@@ -1493,7 +1502,7 @@ function Ai.tick()
                 local free = b:listFreeEdges()
                 local kernel = (dotsai and dotsai.solve) and "C" or "L"
                 print(string.format(
-                    "[AI %s] %s %dx%d  edge=%s  think=%dms  apply=%d/%.1fms  classify=%d/%.1fms  cold=%d/%.1fms  hot=%d/%.1fms  solve=%d/%dms(first=%dms)  free=%d  heap=%.1fKB  turn=%d score=%d:%d chain=%d open=%s",
+                    "[AI %s] %s %dx%d  edge=%s  think=%dms  apply=%d/%.1fms  classify=%d/%.1fms  cold=%d/%.1fms  hot=%d/%.1fms  solve=%d/%dms(first=%dms)  free=%d  heap=%.1fKB  turn=%d score=%d:%d chain=%d open=%s search=%s",
                     kernel,
                     Ai.difficulty, b.DOTS, b.DOTS,
                     tostring(runtime.result),
@@ -1506,7 +1515,7 @@ function Ai.tick()
                     #free,
                     collectgarbage("count"),
                     b.currentPlayer, b.score[1], b.score[2], b.chainLen,
-                    table.concat(free, ",")
+                    table.concat(free, ","), profSearchStatus
                 ))
             end
         end

@@ -56,7 +56,7 @@ class NativeTests(unittest.TestCase):
                 self.assertEqual(kernel.test_exact_value(), max(values.values()))
                 self.assertEqual(values[edge], max(values.values()))
 
-    def test_maximum_search_restarts_without_stale_values(self):
+    def test_search_restarts_after_completion_interruption_and_node_limit(self):
         kernel = native_solver()
         set_topology(kernel, 4)
         free = [2, 4, 6, 7, 8, 9, 10, 12, 14, 16, 17, 18, 23]
@@ -69,13 +69,20 @@ class NativeTests(unittest.TestCase):
         kernel.test_exact_begin(maximum, len(maximum))
         self.assertEqual(kernel.test_exact_step(100), 0)
         self.assertTrue(kernel.test_exact_begin(bytes(free), len(free)))
-        self.assertEqual(kernel.test_exact_next(), 1)
+        self.assertEqual(kernel.test_exact_next(), 0)
         edge = 0
         while not edge:
             edge = kernel.test_exact_step(512)
         self.assertEqual(edge, 12)
         self.assertEqual(kernel.test_exact_value(), 7)
+        set_topology(kernel, 8)
+        self.assertTrue(kernel.test_exact_begin(bytes(range(1, 64)), 63))
+        self.assertEqual(kernel.test_exact_step(50000), -1)
+        self.assertEqual(kernel.test_exact_step(1), -1)
+        set_topology(kernel, 4)
+        self.assertTrue(kernel.test_exact_begin(bytes(free), len(free)))
+        self.assertEqual(kernel.test_exact_step(10000), 12)
         # Invalid starts discard an old result, including an already solved one.
-        for invalid in (b"", bytes([0]), bytes([25]), bytes([2, 2]), bytes(range(1, 20))):
+        for invalid in (b"", bytes([0]), bytes([25]), bytes([2, 2]), bytes(range(1, 65))):
             self.assertFalse(kernel.test_exact_begin(invalid, len(invalid)))
             self.assertEqual(kernel.test_exact_step(512), 0)

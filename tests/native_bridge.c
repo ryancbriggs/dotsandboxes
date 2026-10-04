@@ -19,8 +19,8 @@ int test_exact_begin(const uint8_t* edges, int count) {
 }
 
 int test_exact_step(unsigned states) { return edge_search_step(&exact, states); }
-int test_exact_value(void) { return exact.values[exact.full]; }
-unsigned test_exact_next(void) { return exact.next; }
+int test_exact_value(void) { return exact.value; }
+unsigned test_exact_next(void) { return exact.nodes; }
 
 void test_cold_init(int boxes, int edges, const uint8_t* be, const uint8_t* eb) {
     memset(&topology, 0, sizeof(topology));

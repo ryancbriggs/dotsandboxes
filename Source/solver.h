@@ -5,7 +5,7 @@
 //
 //   solve()           ←→ solveComponents() + componentOpenValue()
 //   cold_decompose()  ←→ Components.collectCold()
-//   edge_search_*()  ←→ endgameEdgeSearch() (incremental exhaustive minimax)
+//   edge_search_*()  → endgameEdgeSearch() (incremental alpha-beta search)
 //
 // Shared by the Playdate extension and host tests. parity_test.c checks the
 // solvers against independent recursive oracles; native_test.py also checks
@@ -226,66 +226,208 @@ static int cold_decompose(ColdTopo* t, const uint8_t* filled,
     return n;
 }
 
-// ─── Exact remaining-edge search ──────────────────────────────────────────
-// Every child removes a bit, so increasing mask order visits children first.
-// Values are future box margins for the player to move; captures keep the
-// turn. Scores fit in int8_t (at most 49 boxes), using 256 KiB at 18 free edges.
-// The caller owns the workspace and advances it in small, interruptible batches.
-#define DOTSAI_EXACT_MAX_EDGES 18
+// ─── Remaining-edge search ────────────────────────────────────────────────
+// Alpha-beta with chain-equivalent moves removed. Junctions remain physical
+// boxes: independent-chain theory is used only once every live box has degree 2.
+// An explicit stack lets Lua yield/cancel between small batches. Only a fully
+// searched root supplies a move; time/node limits fall back to the Lua policy.
+#define DOTSAI_EXACT_MAX_EDGES 63
+#define DOTSAI_EDGE_MEMO_SIZE 32768   // 512 KiB, replaces the old 256 KiB flat DP
 
 typedef struct {
-    int8_t values[1u << DOTSAI_EXACT_MAX_EDGES];
-    uint32_t masks[DOTSAI_EXACT_MAX_EDGES][2];
+    uint64_t key;
+    int16_t value;
+    uint8_t bound;                   // 1 exact, 2 lower, 3 upper
+} EdgeMemo;
+
+typedef struct {
+    uint64_t remaining, choices, preferred;
+    int alpha, beta, initialAlpha, initialBeta, best;
+    uint8_t entered, pending, gained, bestEdge;
+} EdgeFrame;
+
+typedef struct {
+    EdgeMemo memo[DOTSAI_EDGE_MEMO_SIZE];
+    EdgeFrame stack[DOTSAI_EXACT_MAX_EDGES + 1];
+    uint64_t boxes[DOTSAI_MAX_BOXES + 1], bits[DOTSAI_MAX_EDGES + 1];
     uint8_t edges[DOTSAI_EXACT_MAX_EDGES];
-    uint32_t next, full;
-    int bestEdge;
+    ColdTopo* topo;
+    unsigned nodes, maxNodes;
+    int depth, bestEdge, value, aborted;
 } EdgeSearch;
 
-static int edge_search_begin(EdgeSearch* s, const ColdTopo* t,
-                             const uint8_t* freeEdges, int count) {
-    s->next = s->full = 0;
-    s->bestEdge = 0;
-    if (!freeEdges || count < 1 || count > DOTSAI_EXACT_MAX_EDGES) return 0;
-    uint32_t bits[DOTSAI_MAX_EDGES + 1] = {0};
-    uint32_t boxes[DOTSAI_MAX_BOXES + 1] = {0};
+static EdgeMemo* edge_memo(EdgeSearch* s, uint64_t mask) {
+    mask ^= mask >> 30; mask *= UINT64_C(0xbf58476d1ce4e5b9);
+    mask ^= mask >> 27; mask *= UINT64_C(0x94d049bb133111eb);
+    mask ^= mask >> 31;
+    return &s->memo[mask & (DOTSAI_EDGE_MEMO_SIZE - 1)];
+}
+
+static int edge_gain(const EdgeSearch* s, uint64_t mask, unsigned index) {
+    uint64_t bit = UINT64_C(1) << index;
+    const uint8_t* adjacent = s->topo->edgeBoxes[s->edges[index]];
+    return ((mask & s->boxes[adjacent[0]]) == bit)
+         + ((mask & s->boxes[adjacent[1]]) == bit);
+}
+
+static uint64_t edge_candidates(const EdgeSearch* s, uint64_t mask,
+                                const uint8_t* degree, int hot) {
+    const ColdTopo* t = s->topo;
+    uint8_t seen[DOTSAI_MAX_BOXES + 1] = {0};
+    uint64_t choices = 0;
+    for (int seed = 1; seed <= t->numBoxes; seed++) {
+        if (seen[seed] || degree[seed] != (hot ? 1 : 2)) continue;
+        int stack[DOTSAI_MAX_BOXES], n = 1, len = 0, ends = 0;
+        stack[0] = seed; seen[seed] = 1;
+        uint64_t component = 0, internal = 0, entries = 0;
+        while (n) {
+            int b = stack[--n];
+            len++; ends += degree[b] == 1;
+            component |= mask & s->boxes[b];
+            for (int j = 0; j < 4; j++) {
+                int e = t->boxEdges[b][j];
+                if (!(s->bits[e] & mask)) continue;
+                int a = t->edgeBoxes[e][0], c = t->edgeBoxes[e][1];
+                int other = a == b ? c : a;
+                if (other && degree[other] > 0 && degree[other] <= 2) {
+                    internal |= s->bits[e];
+                    if (!seen[other]) { seen[other] = 1; stack[n++] = other; }
+                } else entries |= s->bits[e];
+            }
+        }
+        if (hot) {
+            // Take forced captures until the two-box chain or four-box loop
+            // handout is ready. Keep both capture and handout choices then.
+            if ((ends == 1 && len != 2) || (ends == 2 && len != 4))
+                return mask & s->boxes[seed];
+            choices |= component;
+        } else {
+            // Entries of a cold path are equivalent. Open two-chains inside
+            // so the receiver cannot give both boxes back without scoring.
+            uint64_t opening = len == 2 && internal ? internal
+                             : entries ? entries : component;
+            choices |= opening & -opening;
+        }
+    }
+    if (!hot) {
+        // Direct junction/boundary links include every safe move.
+        for (uint64_t scan = mask; scan; scan &= scan - 1) {
+            unsigned i = (unsigned)__builtin_ctzll(scan);
+            const uint8_t* adjacent = t->edgeBoxes[s->edges[i]];
+            if (degree[adjacent[0]] != 2 && degree[adjacent[1]] != 2)
+                choices |= UINT64_C(1) << i;
+        }
+    }
+    return choices;
+}
+
+static int edge_cold_value(EdgeSearch* s, uint64_t mask) {
+    uint8_t filled[DOTSAI_MAX_EDGES + 1] = {0};
+    ColdComp comps[DOTSAI_MAX_BOXES];
+    CompState state = {0};
+    for (int e = 1; e <= s->topo->numEdges; e++) filled[e] = !(s->bits[e] & mask);
+    int count = cold_decompose(s->topo, filled, NULL, comps);
     for (int i = 0; i < count; i++) {
-        int edge = freeEdges[i];
-        if (edge < 1 || edge > t->numEdges || bits[edge]) return 0;
-        bits[edge] = 1u << i;
-        s->edges[i] = (uint8_t)edge;
+        uint8_t* lengths = comps[i].isLoop ? state.loops : state.chains;
+        lengths[comps[i].len]++;
+    }
+    return solve(&state);
+}
+
+static void edge_return(EdgeSearch* s, int value) {
+    EdgeFrame* f = &s->stack[--s->depth];
+    EdgeMemo* memo = edge_memo(s, f->remaining);
+    *memo = (EdgeMemo){f->remaining, (int16_t)value,
+        value <= f->initialAlpha ? 3 : value >= f->initialBeta ? 2 : 1};
+    if (!s->depth) {
+        s->bestEdge = f->bestEdge;
+        s->value = value;
+        return;
+    }
+    EdgeFrame* parent = &s->stack[s->depth - 1];
+    value = parent->gained ? parent->gained + value : -value;
+    if (value > parent->best) {
+        parent->best = value;
+        parent->bestEdge = s->edges[parent->pending];
+    }
+    if (value > parent->alpha) parent->alpha = value;
+}
+
+static int edge_search_begin(EdgeSearch* s, ColdTopo* t,
+                             const uint8_t* freeEdges, int count) {
+    s->depth = s->bestEdge = s->aborted = s->value = 0;
+    s->nodes = 0;
+    if (!freeEdges || count < 1 || count > DOTSAI_EXACT_MAX_EDGES) return 0;
+    memset(s->bits, 0, sizeof(s->bits));
+    memset(s->boxes, 0, sizeof(s->boxes));
+    for (int i = 0; i < count; i++) {
+        int e = freeEdges[i];
+        if (e < 1 || e > t->numEdges || s->bits[e]) return 0;
+        s->bits[e] = UINT64_C(1) << i;
+        s->edges[i] = (uint8_t)e;
     }
     for (int b = 1; b <= t->numBoxes; b++)
-        for (int k = 0; k < 4; k++) boxes[b] |= bits[t->boxEdges[b][k]];
-    for (int i = 0; i < count; i++)
-        for (int j = 0; j < 2; j++)
-            s->masks[i][j] = boxes[t->edgeBoxes[s->edges[i]][j]];
-    s->values[0] = 0;
-    s->next = 1;
-    s->full = (1u << count) - 1;
+        for (int k = 0; k < 4; k++) s->boxes[b] |= s->bits[t->boxEdges[b][k]];
+    memset(s->memo, 0, sizeof(s->memo));
+    s->topo = t;
+    s->maxNodes = count > 18 ? 20000 : 2000000;
+    s->stack[0] = (EdgeFrame){.remaining = (UINT64_C(1) << count) - 1,
+        .alpha = -100, .beta = 100};
+    s->depth = 1;
     return 1;
 }
 
-// Returns the best edge only when the whole search is complete, else 0.
-// A new begin discards a previous partial search without clearing the table:
-// all dependencies are overwritten before they can be read again.
-static int edge_search_step(EdgeSearch* s, unsigned states) {
-    if (!s->next) return 0;
-    while (states-- && s->next <= s->full) {
-        uint32_t remaining = s->next++;
-        int best = -127, bestIndex = 0;
-        for (uint32_t choices = remaining; choices; choices &= choices - 1) {
-            unsigned i = (unsigned)__builtin_ctz(choices);
-            uint32_t bit = 1u << i;
-            int gained = ((remaining & s->masks[i][0]) == bit)
-                       + ((remaining & s->masks[i][1]) == bit);
-            int rest = s->values[remaining ^ bit];
-            int value = gained ? gained + rest : -rest;
-            if (value > best) { best = value; bestIndex = (int)i; }
+// 0 = in progress, -1 = budget exhausted, positive = fully searched move.
+static int edge_search_step(EdgeSearch* s, unsigned nodes) {
+    while (s->depth) {
+        EdgeFrame* f = &s->stack[s->depth - 1];
+        if (!f->entered) {
+            if (!nodes--) return 0;
+            if (s->nodes++ >= s->maxNodes) {
+                s->depth = 0; s->aborted = 1; return -1;
+            }
+            f->initialAlpha = f->alpha; f->initialBeta = f->beta;
+            EdgeMemo* memo = edge_memo(s, f->remaining);
+            if (memo->bound && memo->key == f->remaining && s->depth > 1) {
+                if (memo->bound == 1) { edge_return(s, memo->value); continue; }
+                if (memo->bound == 2 && memo->value > f->alpha) f->alpha = memo->value;
+                if (memo->bound == 3 && memo->value < f->beta) f->beta = memo->value;
+                if (f->alpha >= f->beta) { edge_return(s, memo->value); continue; }
+            }
+            uint8_t degree[DOTSAI_MAX_BOXES + 1] = {0};
+            int cold = 1, hot = 0;
+            for (int b = 1; b <= s->topo->numBoxes; b++) {
+                degree[b] = (uint8_t)__builtin_popcountll(f->remaining & s->boxes[b]);
+                if (degree[b] == 1) hot = 1;
+                if (degree[b] && degree[b] != 2) cold = 0;
+            }
+            if (cold && s->depth > 1) {
+                edge_return(s, edge_cold_value(s, f->remaining)); continue;
+            }
+            f->choices = edge_candidates(s, f->remaining, degree, hot);
+            f->preferred = 0;
+            for (uint64_t scan = f->choices; scan; scan &= scan - 1) {
+                unsigned i = (unsigned)__builtin_ctzll(scan);
+                const uint8_t* adjacent = s->topo->edgeBoxes[s->edges[i]];
+                if (hot ? edge_gain(s, f->remaining, i) > 0
+                    : degree[adjacent[0]] != 2 && degree[adjacent[1]] != 2)
+                    f->preferred |= UINT64_C(1) << i;
+            }
+            f->best = -100; f->entered = 1;
         }
-        s->values[remaining] = (int8_t)best;
-        if (remaining == s->full) s->bestEdge = s->edges[bestIndex];
+        if (!f->choices || f->alpha >= f->beta) {
+            edge_return(s, f->best); continue;
+        }
+        unsigned i = (unsigned)__builtin_ctzll(f->preferred ? f->preferred : f->choices);
+        uint64_t bit = UINT64_C(1) << i;
+        f->choices &= ~bit; f->preferred &= ~bit;
+        f->pending = (uint8_t)i;
+        f->gained = (uint8_t)edge_gain(s, f->remaining, i);
+        s->stack[s->depth++] = (EdgeFrame){.remaining = f->remaining ^ bit,
+            .alpha = f->gained ? f->alpha - f->gained : -f->beta,
+            .beta = f->gained ? f->beta - f->gained : -f->alpha};
     }
-    return s->bestEdge;
+    return s->aborted ? -1 : s->bestEdge;
 }
 
 #endif // DOTSAI_SOLVER_H
